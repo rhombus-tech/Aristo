@@ -1,5 +1,9 @@
 # ShuttleVM
 
+<p align="center">
+  <img src="assets/Aristo.webp" width="800">
+</p>
+
 ShuttleVM is a general-purpose virtual machine built on HyperSDK that implements an object-event model for regional execution in Trusted Execution Environments (TEEs).
 
 ## Architecture
