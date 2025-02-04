@@ -3,3 +3,17 @@ tests/e2e/e2e.test
 build
 .morpheus-cli/
 **.coverage.**
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.wasm
