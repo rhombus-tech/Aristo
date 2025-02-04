@@ -1,0 +1,28 @@
+services:
+  devnet:
+    container_name: devnet
+    build:
+      dockerfile: Dockerfile.devnet
+      context: .
+    restart: always
+    ports:
+      - "9650:9650"
+    environment:
+      - AVALANCHEGO_HTTP_HOST=0.0.0.0
+      - AVALANCHEGO_PUBLIC_IP=0.0.0.0
+      - NETWORK_ID=local
+      - STAKING_ENABLED=false
+      - API_ADMIN_ENABLED=true
+      - NETWORK_HEALTH_MIN_CONN_PEERS=0
+      - AVALANCHEGO_DIR=/root/.hypersdk/avalanchego-v1.11.12-rc.2
+      - VERSION=v1.11.12-rc.2
+      - HYPERSDK_DIR=/root/.hypersdk
+    volumes:
+      - devnet_db:${AVALANCHEGO_DIR}/db
+      - type: bind
+        source: ./config/chains
+        target: ${AVALANCHEGO_DIR}/chains
+        read_only: true
+
+volumes:
+  devnet_db:

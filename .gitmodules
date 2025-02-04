@@ -1,0 +1,6 @@
+[submodule "hyper"]
+	path = hyper
+	url = https://github.com/BlockDevsUnited/hypersdk-wasm
+[submodule "execution"]
+	path = execution
+	url = https://github.com/rhombus-tech/POC4
