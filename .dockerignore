@@ -1,6 +1,15 @@
 .git
-web_wallet/node_modules
-tests/e2e/e2e.test
+.gitignore
+.vscode
+**/node_modules
+**/dist
+**/*.test
+**/*.md
+**/tmp
+devnet_db
+web_wallet
+hyper
+**/*.wasm
 build
 .morpheus-cli/
 **.coverage.**

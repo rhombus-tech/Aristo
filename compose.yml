@@ -1,28 +1,29 @@
 services:
-  devnet:
-    container_name: devnet
+  timeserver1:
+    container_name: timeserver1
     build:
-      dockerfile: Dockerfile.devnet
+      dockerfile: Dockerfile.timeserver
       context: .
     restart: always
     ports:
-      - "9650:9650"
+      - "8080:8080"
     environment:
-      - AVALANCHEGO_HTTP_HOST=0.0.0.0
-      - AVALANCHEGO_PUBLIC_IP=0.0.0.0
-      - NETWORK_ID=local
-      - STAKING_ENABLED=false
-      - API_ADMIN_ENABLED=true
-      - NETWORK_HEALTH_MIN_CONN_PEERS=0
-      - AVALANCHEGO_DIR=/root/.hypersdk/avalanchego-v1.11.12-rc.2
-      - VERSION=v1.11.12-rc.2
-      - HYPERSDK_DIR=/root/.hypersdk
-    volumes:
-      - devnet_db:${AVALANCHEGO_DIR}/db
-      - type: bind
-        source: ./config/chains
-        target: ${AVALANCHEGO_DIR}/chains
-        read_only: true
+      - SERVER_ID=server1
+      - REGION_ID=local
+    command: ["/app/server", "-id", "server1", "-region", "local", "-address", ":8080"]
+
+  timeserver2:
+    container_name: timeserver2
+    build:
+      dockerfile: Dockerfile.timeserver
+      context: .
+    restart: always
+    ports:
+      - "8081:8080"
+    environment:
+      - SERVER_ID=server2
+      - REGION_ID=local
+    command: ["/app/server", "-id", "server2", "-region", "local", "-address", ":8080"]
 
 volumes:
   devnet_db:

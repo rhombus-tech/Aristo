@@ -1,0 +1,20 @@
+{
+    "network": {
+        "quorum_size": 2,
+        "max_latency_ms": 100
+    },
+    "regions": {
+        "local": {
+            "servers": [
+                {
+                    "id": "server1",
+                    "address": "http://timeserver1:8080"
+                },
+                {
+                    "id": "server2",
+                    "address": "http://timeserver2:8080"
+                }
+            ]
+        }
+    }
+}

@@ -1,4 +1,3 @@
-// timeserver/server.go
 package timeserver
 
 import (
@@ -8,19 +7,10 @@ import (
     "encoding/binary"
     "encoding/json"
     "fmt"
+    "log"
     "net/http"
     "time"
 )
-
-// TimeServer represents a single time server instance
-type TimeServer struct {
-    ID        string
-    RegionID  string
-    PublicKey ed25519.PublicKey
-    privKey   ed25519.PrivateKey
-    Address   string
-    client    *http.Client
-}
 
 // NewTimeServer creates a new time server instance
 func NewTimeServer(id string, regionID string, address string) (*TimeServer, error) {
@@ -36,11 +26,14 @@ func NewTimeServer(id string, regionID string, address string) (*TimeServer, err
         privKey:   priv,
         Address:   address,
         client:    &http.Client{Timeout: 5 * time.Second},
+        startTime: time.Now(),
     }, nil
 }
 
 // GetTimestamp gets a timestamp with proof
 func (ts *TimeServer) GetTimestamp(ctx context.Context, req *VerificationRequest) (*VerificationResponse, error) {
+    log.Printf("[%s] Received timestamp request from region %s", ts.ID, req.RegionID)
+    
     if req == nil {
         return nil, fmt.Errorf("nil request")
     }
@@ -64,31 +57,67 @@ func (ts *TimeServer) GetTimestamp(ctx context.Context, req *VerificationRequest
         Nonce:    req.Nonce,
     }
 
-    return &VerificationResponse{
+    response := &VerificationResponse{
         Timestamp:   timestamp,
         ServerProof: sig,
         Delay:      time.Since(now),
-    }, nil
+    }
+
+    log.Printf("[%s] Generated timestamp %v with delay %v", ts.ID, now, response.Delay)
+    return response, nil
 }
 
 // Serve starts the time server HTTP endpoint
 func (ts *TimeServer) Serve(addr string) error {
+    log.Printf("[%s] Starting time server on %s", ts.ID, addr)
+    
     mux := http.NewServeMux()
     mux.HandleFunc("/timestamp", ts.handleTimestamp)
+    mux.HandleFunc("/health", ts.handleHealth)
+    
     return http.ListenAndServe(addr, mux)
 }
 
-// HTTP handler for timestamp requests
+// handleHealth responds to health check requests
+func (ts *TimeServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    status := struct {
+        ID        string    `json:"id"`
+        RegionID  string    `json:"region_id"`
+        Uptime    string    `json:"uptime"`
+        Timestamp time.Time `json:"timestamp"`
+        Status    string    `json:"status"`
+    }{
+        ID:        ts.ID,
+        RegionID:  ts.RegionID,
+        Uptime:    time.Since(ts.startTime).String(),
+        Timestamp: time.Now().UTC(),
+        Status:    "healthy",
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(status)
+    log.Printf("[%s] Health check: uptime %v", ts.ID, status.Uptime)
+}
+
+// handleTimestamp handles HTTP timestamp requests
 func (ts *TimeServer) handleTimestamp(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
         return
     }
 
+    log.Printf("[%s] Received HTTP timestamp request", ts.ID)
+
     // Get nonce from header
     nonceStr := r.Header.Get("X-Nonce")
     nonce, err := base64.StdEncoding.DecodeString(nonceStr)
     if err != nil {
+        log.Printf("[%s] Invalid nonce: %v", ts.ID, err)
         http.Error(w, "invalid nonce", http.StatusBadRequest)
         return
     }
@@ -102,14 +131,12 @@ func (ts *TimeServer) handleTimestamp(w http.ResponseWriter, r *http.Request) {
     // Get timestamp
     resp, err := ts.GetTimestamp(r.Context(), req)
     if err != nil {
+        log.Printf("[%s] Error generating timestamp: %v", ts.ID, err)
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
 
     // Return response
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "time":      resp.Timestamp.Time.Format(time.RFC3339Nano),
-        "signature": base64.StdEncoding.EncodeToString(resp.Timestamp.Signature),
-        "server_id": ts.ID,
-    })
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(resp)
 }
