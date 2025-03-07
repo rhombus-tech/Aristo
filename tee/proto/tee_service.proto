@@ -9,9 +9,6 @@ service TeeExecution {
     rpc GetRegions(GetRegionsRequest) returns (GetRegionsResponse);
     rpc GetAttestations(GetAttestationsRequest) returns (RegionAttestations);
     rpc DeployContract(DeployContractRequest) returns (DeployContractResponse);
-    rpc CallContract(CallContractRequest) returns (CallContractResponse);
-    rpc GetEvent(GetEventRequest) returns (GetEventResponse);
-    rpc SetupTestObject(SetupTestObjectRequest) returns (SetupTestObjectResponse);
 }
 
 message ExecutionRequest {
@@ -35,38 +32,6 @@ message ExecutionResult {
     uint64 syscall_count  = 7;  // Number of system calls made
 }
 
-message DeployContractRequest {
-    bytes  contract_code  = 1;  // The WebAssembly bytecode
-    bytes  init_args      = 2;  // Initialization arguments (serialized)
-    string region_id      = 3;  // Region to deploy to
-    string contract_name  = 4;  // Optional contract name for reference
-    bool   detailed_proof = 5;  // Whether to include detailed attestation
-}
-
-message DeployContractResponse {
-    string contract_id    = 1;  // ID of the deployed contract
-    bytes  state_hash     = 2;  // Hash of initial state
-    string timestamp      = 3;  // Deployment timestamp
-    repeated TEEAttestation attestations = 4;  // TEE attestations/proofs
-    uint64 deployment_time = 5;  // Time taken for deployment in milliseconds
-}
-
-message CallContractRequest {
-    string contract_id     = 1;  // ID of the contract to call
-    string function_name   = 2;  // Name of the function to call
-    bytes  parameters      = 3;  // Function parameters (serialized)
-    string region_id       = 4;  // Region where the contract is deployed
-    bool   detailed_proof  = 5;  // Whether to include detailed attestation
-}
-
-message CallContractResponse {
-    bytes  result          = 1;  // Function result (serialized)
-    bytes  state_hash      = 2;  // New state hash after the call
-    string timestamp       = 3;  // Call timestamp
-    repeated TEEAttestation attestations = 4;  // TEE attestations/proofs
-    uint64 execution_time  = 5;  // Time taken for execution in milliseconds
-}
-
 message TEEAttestation {
     bytes  enclave_id   = 1;
     bytes  measurement  = 2;
@@ -85,24 +50,6 @@ message Event {
     string region_id     = 4;
     string timestamp     = 5;
     repeated TEEAttestation attestations = 6;
-}
-
-message GetEventRequest {
-    string event_id = 1;
-    string region_id = 2;
-}
-
-message GetEventResponse {
-    Event event = 1;
-}
-
-message SetupTestObjectRequest {
-    string object_id = 1;
-    string region_id = 2;
-}
-
-message SetupTestObjectResponse {
-    bool success = 1;
 }
 
 message GetRegionsRequest {}
@@ -126,4 +73,16 @@ message RegionAttestations {
 
 message GetAttestationsRequest {
     string region_id = 1;
+}
+
+// New message types for contract deployment
+message DeployContractRequest {
+    bytes contract_bytes = 1;  // WebAssembly bytecode to deploy
+    string region_id = 2;      // Region to deploy the contract to
+}
+
+message DeployContractResponse {
+    string contract_id = 1;    // Unique identifier for the deployed contract
+    string timestamp = 2;      // Timestamp of deployment
+    repeated TEEAttestation attestations = 3;  // Optional attestations for the deployment
 }

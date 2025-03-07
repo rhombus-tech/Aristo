@@ -4,3 +4,6 @@
 [submodule "execution"]
 	path = execution
 	url = https://github.com/rhombus-tech/POC4
+[submodule "enarx"]
+	path = enarx
+	url = https://github.com/rhombus-tech/enarx.git

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"time"
 
 	"github.com/rhombus-tech/vm/core"
@@ -33,3 +34,7 @@ type TEEAttestation struct {
     RegionProof []byte    `json:"region_proof"`
 }
 
+// TEEVerifier defines the interface for verifying TEE attestations
+type TEEVerifier interface {
+	VerifyAttestation(ctx context.Context, attestation []byte) error
+}
