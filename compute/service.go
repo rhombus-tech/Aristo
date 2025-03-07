@@ -3,6 +3,7 @@ package compute
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -503,4 +504,95 @@ func (n *ComputeNode) Close() error {
         return fmt.Errorf("multiple close errors: %v", errs)
     }
     return nil
+}
+
+// Add GetAttestations implementation if needed
+func (n *ComputeNode) GetAttestations(ctx context.Context, req *proto.GetAttestationsRequest) (*proto.RegionAttestations, error) {
+    // This is a placeholder implementation
+    // Complete implementation should return proper region attestations
+    return &proto.RegionAttestations{Attestations: []*proto.TEEAttestation{}}, nil
+}
+
+// DeployContract implements the new RPC method for contract deployment
+func (n *ComputeNode) DeployContract(ctx context.Context, req *proto.DeployContractRequest) (*proto.DeployContractResponse, error) {
+    // Validate request
+    if req.ContractCode == nil || len(req.ContractCode) == 0 {
+        return nil, fmt.Errorf("contract code is required")
+    }
+    
+    if req.RegionId == "" {
+        return nil, fmt.Errorf("region ID is required")
+    }
+
+    // Acquire a task slot (reuse logic from Execute)
+    if !n.acquireTaskSlot() {
+        return nil, fmt.Errorf("node is at maximum capacity")
+    }
+    defer n.releaseTaskSlot()
+
+    // Create temporary directory for deployment outputs
+    outputDir, err := ioutil.TempDir("", "deployment-")
+    if err != nil {
+        return nil, fmt.Errorf("failed to create temp directory: %w", err)
+    }
+    defer os.RemoveAll(outputDir)
+    
+    // Use executeTEE with a deployment-specific request
+    // This is a workaround until we add a proper Deploy method to the bridge
+    
+    // Store contract code in a file that the bridge can access
+    contractPath := outputDir + "/contract.wasm"
+    if err := ioutil.WriteFile(contractPath, req.ContractCode, 0644); err != nil {
+        return nil, fmt.Errorf("failed to write contract file: %w", err)
+    }
+    
+    // Add contract path to parameters
+    // In a real implementation, you would modify the bridge to support deployment directly
+    deployParams := map[string]interface{}{
+        "contract_path": contractPath,
+        "init_args": req.InitArgs,
+        "contract_name": req.ContractName,
+    }
+    
+    paramsBytes, err := json.Marshal(deployParams)
+    if err != nil {
+        return nil, fmt.Errorf("failed to marshal deployment parameters: %w", err)
+    }
+    
+    deployReq := &proto.ExecutionRequest{
+        FunctionCall:  "__deploy_contract",
+        Parameters:    paramsBytes,
+        RegionId:      req.RegionId,
+        DetailedProof: req.DetailedProof,
+    }
+    
+    // Execute the deployment through the standard execution path
+    result, err := n.executeTEE(ctx, deployReq)
+    if err != nil {
+        return nil, fmt.Errorf("contract deployment failed: %w", err)
+    }
+
+    // Parse deployment result
+    var deployResult struct {
+        ContractID    string              `json:"contract_id"`
+        StateHash     []byte              `json:"state_hash"`
+        Timestamp     string              `json:"timestamp"`
+        DeploymentTime uint64             `json:"deployment_time"`
+    }
+    
+    if err := json.Unmarshal(result.Output, &deployResult); err != nil {
+        return nil, fmt.Errorf("failed to parse deployment result: %w", err)
+    }
+
+    // Convert attestations to proto format
+    protoAttestations := n.convertAttestations(result.Attestations)
+
+    // Create and return response
+    return &proto.DeployContractResponse{
+        ContractId:     deployResult.ContractID,
+        StateHash:      result.StateHash,  // Use the state hash from the execution result
+        Timestamp:      deployResult.Timestamp,
+        Attestations:   protoAttestations,
+        DeploymentTime: deployResult.DeploymentTime,
+    }, nil
 }

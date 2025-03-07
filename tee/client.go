@@ -231,6 +231,101 @@ func (c *Client) compareResults(sgxRes, sevRes *proto.ExecutionResult) error {
     return nil
 }
 
+// DeployContract deploys a WebAssembly contract to both SGX and SEV TEEs
+// in the specified region (or default if regionID is empty).
+// It verifies attestations and ensures results from both TEEs match.
+func (c *Client) DeployContract(
+    ctx context.Context,
+    contractCode []byte,
+    initArgs []byte,
+    regionID string,
+    contractName string,
+) (string, error) {
+    // Validate parameters
+    if len(contractCode) == 0 {
+        return "", fmt.Errorf("contract code cannot be empty")
+    }
+    
+    // Build the request proto
+    req := &proto.DeployContractRequest{
+        ContractCode:   contractCode,
+        InitArgs:       initArgs,
+        RegionId:       regionID,
+        ContractName:   contractName,
+        DetailedProof:  true, // Enable detailed proof by default
+    }
+
+    var sgxResult, sevResult *proto.DeployContractResponse
+    var err error
+
+    // Check if this is a regional deployment
+    if regionID != "" {
+        if pair, ok := c.regionTEEs[regionID]; ok {
+            // Deploy in specific region
+            sgxResult, err = pair.sgxClient.DeployContract(ctx, req)
+            if err != nil {
+                return "", fmt.Errorf("regional SGX DeployContract failed: %w", err)
+            }
+
+            sevResult, err = pair.sevClient.DeployContract(ctx, req)
+            if err != nil {
+                return "", fmt.Errorf("regional SEV DeployContract failed: %w", err)
+            }
+        }
+    }
+
+    // Fall back to default TEE clients if no region specified or not found
+    if sgxResult == nil {
+        sgxResult, err = c.sgxClient.DeployContract(ctx, req)
+        if err != nil {
+            return "", fmt.Errorf("SGX DeployContract failed: %w", err)
+        }
+
+        sevResult, err = c.sevClient.DeployContract(ctx, req)
+        if err != nil {
+            return "", fmt.Errorf("SEV DeployContract failed: %w", err)
+        }
+    }
+
+    // Convert attestations and verify
+    sgxAtts, err := protoToCoreAttestations(sgxResult.Attestations)
+    if err != nil {
+        return "", fmt.Errorf("failed to convert SGX attestations: %w", err)
+    }
+    
+    sevAtts, err := protoToCoreAttestations(sevResult.Attestations)
+    if err != nil {
+        return "", fmt.Errorf("failed to convert SEV attestations: %w", err)
+    }
+
+    // Verify both attestation sets
+    if err := c.verifier.VerifyAttestationPair(ctx, sgxAtts, nil); err != nil {
+        return "", fmt.Errorf("SGX attestation verify failed: %w", err)
+    }
+    if err := c.verifier.VerifyAttestationPair(ctx, sevAtts, nil); err != nil {
+        return "", fmt.Errorf("SEV attestation verify failed: %w", err)
+    }
+
+    // Compare results to ensure they match
+    if err := c.compareDeployResults(sgxResult, sevResult); err != nil {
+        return "", err
+    }
+
+    // Return the contract ID
+    return sgxResult.ContractId, nil
+}
+
+// Helper method to compare deployment results from SGX and SEV
+func (c *Client) compareDeployResults(sgxRes, sevRes *proto.DeployContractResponse) error {
+    if sgxRes.ContractId != sevRes.ContractId {
+        return fmt.Errorf("contract ID mismatch between SGX and SEV results")
+    }
+    if !bytes.Equal(sgxRes.StateHash, sevRes.StateHash) {
+        return fmt.Errorf("state hash mismatch between SGX and SEV results")
+    }
+    return nil
+}
+
 func (p *TEEPair) Close() error {
     var errs []error
     if p.sgxConn != nil {

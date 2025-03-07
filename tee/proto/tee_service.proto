@@ -8,6 +8,7 @@ service TeeExecution {
     rpc Execute(ExecutionRequest) returns (ExecutionResult);
     rpc GetRegions(GetRegionsRequest) returns (GetRegionsResponse);
     rpc GetAttestations(GetAttestationsRequest) returns (RegionAttestations);
+    rpc DeployContract(DeployContractRequest) returns (DeployContractResponse);
 }
 
 message ExecutionRequest {
@@ -29,6 +30,22 @@ message ExecutionResult {
     uint64 execution_time = 5;  // Time taken in milliseconds
     uint64 memory_used    = 6;  // Memory used during execution
     uint64 syscall_count  = 7;  // Number of system calls made
+}
+
+message DeployContractRequest {
+    bytes  contract_code  = 1;  // The WebAssembly bytecode
+    bytes  init_args      = 2;  // Initialization arguments (serialized)
+    string region_id      = 3;  // Region to deploy to
+    string contract_name  = 4;  // Optional contract name for reference
+    bool   detailed_proof = 5;  // Whether to include detailed attestation
+}
+
+message DeployContractResponse {
+    string contract_id    = 1;  // ID of the deployed contract
+    bytes  state_hash     = 2;  // Hash of initial state
+    string timestamp      = 3;  // Deployment timestamp
+    repeated TEEAttestation attestations = 4;  // TEE attestations/proofs
+    uint64 deployment_time = 5;  // Time taken for deployment in milliseconds
 }
 
 message TEEAttestation {
