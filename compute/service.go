@@ -515,6 +515,12 @@ func (n *ComputeNode) GetAttestations(ctx context.Context, req *proto.GetAttesta
 
 // DeployContract implements the new RPC method for contract deployment
 func (n *ComputeNode) DeployContract(ctx context.Context, req *proto.DeployContractRequest) (*proto.DeployContractResponse, error) {
+    // Check if node is at capacity
+    if !n.acquireTaskSlot() {
+        return nil, ErrNodeBusy
+    }
+    defer n.releaseTaskSlot()
+
     // Validate request
     if req.ContractCode == nil || len(req.ContractCode) == 0 {
         return nil, fmt.Errorf("contract code is required")
@@ -523,12 +529,6 @@ func (n *ComputeNode) DeployContract(ctx context.Context, req *proto.DeployContr
     if req.RegionId == "" {
         return nil, fmt.Errorf("region ID is required")
     }
-
-    // Acquire a task slot (reuse logic from Execute)
-    if !n.acquireTaskSlot() {
-        return nil, fmt.Errorf("node is at maximum capacity")
-    }
-    defer n.releaseTaskSlot()
 
     // Create temporary directory for deployment outputs
     outputDir, err := ioutil.TempDir("", "deployment-")
@@ -595,4 +595,54 @@ func (n *ComputeNode) DeployContract(ctx context.Context, req *proto.DeployContr
         Attestations:   protoAttestations,
         DeploymentTime: deployResult.DeploymentTime,
     }, nil
+}
+
+// CallContract implements the RPC method for executing functions on deployed contracts
+func (n *ComputeNode) CallContract(ctx context.Context, req *proto.CallContractRequest) (*proto.CallContractResponse, error) {
+    // Check if node is at capacity
+    if !n.acquireTaskSlot() {
+        return nil, ErrNodeBusy
+    }
+    defer n.releaseTaskSlot()
+
+    // Validate the request
+    if req.ContractId == "" {
+        return nil, fmt.Errorf("%w: missing contract ID", ErrInvalidRequest)
+    }
+    if req.FunctionName == "" {
+        return nil, fmt.Errorf("%w: missing function name", ErrInvalidRequest)
+    }
+
+    // Create execution request for contract call
+    execReq := &proto.ExecutionRequest{
+        IdTo:         req.ContractId,
+        FunctionCall: req.FunctionName,
+        Parameters:   req.Parameters,
+        RegionId:     req.RegionId,
+        DetailedProof: req.DetailedProof,
+    }
+
+    // Execute the contract call
+    start := time.Now()
+    result, err := n.executeTEE(ctx, execReq)
+    if err != nil {
+        return nil, fmt.Errorf("failed to execute contract: %w", err)
+    }
+    executionTime := uint64(time.Since(start).Milliseconds())
+
+    // Verify attestations from both SGX and SEV
+    if err := n.verifyAttestations(ctx, result.Attestations); err != nil {
+        return nil, fmt.Errorf("attestation verification failed: %w", err)
+    }
+
+    // Create the response
+    response := &proto.CallContractResponse{
+        Result:        result.Output,
+        StateHash:     result.StateHash,
+        Timestamp:     time.Now().Format(time.RFC3339),
+        Attestations:  n.convertAttestations(result.Attestations),
+        ExecutionTime: executionTime,
+    }
+
+    return response, nil
 }

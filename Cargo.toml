@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "hyper/x/contracts/test/contracts/async_consumer",
+    "hyper/x/contracts/test/contracts/async_producer",
+    "hyper/x/contracts/test/contracts/async_producer_fixed",
+    "hyper/x/contracts/test/contracts/async_test",
+    "hyper/x/contracts/test/contracts/balance",
+    "hyper/x/contracts/test/contracts/call_contract",
+    "hyper/x/contracts/test/contracts/deploy_contract",
+    "hyper/x/contracts/test/contracts/failing_test",
+    "hyper/x/contracts/test/contracts/fuel",
+    "hyper/x/contracts/test/contracts/resource_test",
+    "hyper/x/contracts/test/contracts/return_complex_type",
+    "hyper/x/contracts/test/contracts/return_complex_type_async",
+    "hyper/x/contracts/test/contracts/return_complex_type_test",
+    "hyper/x/contracts/test/contracts/simple",
+    "hyper/x/contracts/test/contracts/simple2",
+    "hyper/x/contracts/test/contracts/state_access",
+    "hyper/x/contracts/test/contracts/state_test",
+    "hyper/x/contracts/sdk-macros",
+]
+
+[workspace.dependencies]
+wasmlanche = { path = "hyper/x/contracts/wasmlanche", features = ["debug"] }
+sdk-macros = { path = "hyper/x/contracts/sdk-macros" }
+thiserror = "1.0.56"
+borsh = { version = "0.10.3", default-features = false }
+bytemuck = { version = "1.17.0", features = ["derive"] }
+cfg-if = "1.0.0"
+displaydoc = { version = "0.2.5", default-features = false }
+hashbrown = "0.14.5"
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+pin-project = "1.1.5"
+spin = { version = "0.9.8", default-features = false, features = ["rwlock", "mutex", "spin_mutex"] }
+async-trait = "0.1"
+anyhow = "1.0"
+wasm-opt = "0.116.1"
+futures = { version = "0.3", features = ["executor"] }
+tokio = { version = "1.36.0", features = ["full"] }
+wasmtime = { version = "25.0.3", features = ["async", "cranelift"] }
+bindgen = "0.69.4"
+serde_json = "1.0"
+simulator = { path = "hyper/x/contracts/simulator" }

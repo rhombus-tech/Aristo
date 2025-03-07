@@ -1,0 +1,5 @@
+[rust-analyzer]
+cargo.loadOutDirsFromCheck = true
+procMacro.enable = true
+cargo.buildScripts.enable = true
+diagnostics.disabled = ["unresolved-proc-macro"]

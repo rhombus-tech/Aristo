@@ -5,11 +5,13 @@ import (
     "bytes"
     "context"
     "fmt"
+    "time"
 
     "google.golang.org/grpc"
 
     "github.com/rhombus-tech/vm/tee/proto"
     "github.com/rhombus-tech/vm/actions"
+    "github.com/rhombus-tech/vm/core"
     "github.com/rhombus-tech/vm/verifier"
 )
 
@@ -39,6 +41,9 @@ type Client struct {
     regionTEEs map[string]*TEEPair
 
     verifier *verifier.StateVerifier
+    
+    // Default timeout for client operations
+    defaultTimeout time.Duration
 }
 
 func CreateTEEPair(config *TEEPairConfig) (*TEEPair, error) {
@@ -90,6 +95,24 @@ func NewClient(
         sevConn:    sevConn,
         verifier:   v,
         regionTEEs: make(map[string]*TEEPair),
+    }
+    return client, nil
+}
+
+// NewClientWithConnections creates a new client using existing gRPC connections.
+// This is particularly useful for testing.
+func NewClientWithConnections(sgxConn, sevConn *grpc.ClientConn, stateVerifier *verifier.StateVerifier) (*Client, error) {
+    sgxClient := proto.NewTeeExecutionClient(sgxConn)
+    sevClient := proto.NewTeeExecutionClient(sevConn)
+
+    client := &Client{
+        sgxClient:      sgxClient,
+        sevClient:      sevClient,
+        sgxConn:        sgxConn,
+        sevConn:        sevConn,
+        regionTEEs:     make(map[string]*TEEPair),
+        verifier:       stateVerifier,
+        defaultTimeout: 30 * time.Second,
     }
     return client, nil
 }
@@ -323,6 +346,100 @@ func (c *Client) compareDeployResults(sgxRes, sevRes *proto.DeployContractRespon
     if !bytes.Equal(sgxRes.StateHash, sevRes.StateHash) {
         return fmt.Errorf("state hash mismatch between SGX and SEV results")
     }
+    return nil
+}
+
+// CallContract calls a function on a deployed contract in both SGX and SEV TEEs.
+// It verifies that the results from both TEEs match and returns the result.
+func (c *Client) CallContract(ctx context.Context, contractID, functionName string, params []byte, regionID string) ([]byte, error) {
+    // Create the request
+    request := &proto.CallContractRequest{
+        ContractId:    contractID,
+        FunctionName:  functionName,
+        Parameters:    params,
+        RegionId:      regionID,
+        DetailedProof: true,
+    }
+
+    // Determine which TEE clients to use based on regionID
+    var sgxClient, sevClient proto.TeeExecutionClient
+    if regionID != "" {
+        region, exists := c.regionTEEs[regionID]
+        if !exists {
+            return nil, fmt.Errorf("region %s not found", regionID)
+        }
+        sgxClient = region.sgxClient
+        sevClient = region.sevClient
+    } else {
+        sgxClient = c.sgxClient
+        sevClient = c.sevClient
+    }
+
+    // Set a timeout if the context doesn't have one
+    var cancel context.CancelFunc
+    if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+        ctx, cancel = context.WithTimeout(ctx, c.defaultTimeout)
+        defer cancel()
+    }
+
+    // Call the function on SGX TEE
+    sgxResp, err := sgxClient.CallContract(ctx, request)
+    if err != nil {
+        return nil, fmt.Errorf("SGX contract call failed: %w", err)
+    }
+
+    // Call the function on SEV TEE
+    sevResp, err := sevClient.CallContract(ctx, request)
+    if err != nil {
+        return nil, fmt.Errorf("SEV contract call failed: %w", err)
+    }
+
+    // Compare the results
+    if err := c.compareCallResults(sgxResp, sevResp); err != nil {
+        return nil, err
+    }
+
+    // Verify attestations
+    attestations := [2]core.TEEAttestation{}
+    for i, att := range sgxResp.Attestations {
+        if i >= 2 {
+            break
+        }
+        
+        // Parse timestamp string to time.Time
+        timestamp, err := time.Parse(time.RFC3339, att.Timestamp)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse attestation timestamp: %w", err)
+        }
+        
+        attestations[i] = core.TEEAttestation{
+            EnclaveID:  att.EnclaveId,
+            Measurement: att.Measurement,
+            Timestamp:  timestamp,
+        }
+    }
+    
+    // Verify attestation pair
+    if err := c.verifier.VerifyAttestationPair(ctx, attestations, nil); err != nil {
+        return nil, fmt.Errorf("attestation verification failed: %w", err)
+    }
+
+    // Return the result (using SGX response as the canonical one)
+    return sgxResp.Result, nil
+}
+
+// compareCallResults compares the results from SGX and SEV TEEs to ensure they match.
+func (c *Client) compareCallResults(sgxResp, sevResp *proto.CallContractResponse) error {
+    // Compare state hashes
+    if !bytes.Equal(sgxResp.StateHash, sevResp.StateHash) {
+        return fmt.Errorf("state hash mismatch: SGX %x, SEV %x", sgxResp.StateHash, sevResp.StateHash)
+    }
+
+    // Compare results
+    if !bytes.Equal(sgxResp.Result, sevResp.Result) {
+        return fmt.Errorf("result mismatch: SGX %x, SEV %x", sgxResp.Result, sevResp.Result)
+    }
+
     return nil
 }
 

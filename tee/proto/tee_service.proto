@@ -9,6 +9,7 @@ service TeeExecution {
     rpc GetRegions(GetRegionsRequest) returns (GetRegionsResponse);
     rpc GetAttestations(GetAttestationsRequest) returns (RegionAttestations);
     rpc DeployContract(DeployContractRequest) returns (DeployContractResponse);
+    rpc CallContract(CallContractRequest) returns (CallContractResponse);
 }
 
 message ExecutionRequest {
@@ -46,6 +47,22 @@ message DeployContractResponse {
     string timestamp      = 3;  // Deployment timestamp
     repeated TEEAttestation attestations = 4;  // TEE attestations/proofs
     uint64 deployment_time = 5;  // Time taken for deployment in milliseconds
+}
+
+message CallContractRequest {
+    string contract_id     = 1;  // ID of the contract to call
+    string function_name   = 2;  // Name of the function to call
+    bytes  parameters      = 3;  // Function parameters (serialized)
+    string region_id       = 4;  // Region where the contract is deployed
+    bool   detailed_proof  = 5;  // Whether to include detailed attestation
+}
+
+message CallContractResponse {
+    bytes  result          = 1;  // Function result (serialized)
+    bytes  state_hash      = 2;  // New state hash after the call
+    string timestamp       = 3;  // Call timestamp
+    repeated TEEAttestation attestations = 4;  // TEE attestations/proofs
+    uint64 execution_time  = 5;  // Time taken for execution in milliseconds
 }
 
 message TEEAttestation {
