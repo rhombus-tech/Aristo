@@ -66,7 +66,7 @@ func runFunc(*cobra.Command, []string) error {
     }
 
     ctx := context.Background()
-    shuttleVM, err := vm.New(ctx, vmConfig, log)
+    shuttleVM, err := vm.New(ctx, vmConfig, log, nil) // Pass nil for database for now
     if err != nil {
         return err
     }

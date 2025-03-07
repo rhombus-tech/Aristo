@@ -52,38 +52,82 @@ type TEEPairMetrics struct {
     ConsecutiveErrors uint64      `json:"consecutive_errors"`
 }
 
-
-// ShuttleEvent represents an event with proper time handling
+// ShuttleEvent represents an event emitted from the shuttle system
 type ShuttleEvent struct {
-    ID           string
-    FunctionCall string
-    Parameters   []byte
-    Timestamp    time.Time
-    Attestations [2]core.TEEAttestation
-    RegionID     string
+    ID           string                 `json:"id"`
+    FunctionCall string                 `json:"functionCall"`
+    Parameters   []byte                 `json:"parameters"`
+    RegionID     string                 `json:"regionId"`
+    Timestamp    time.Time              `json:"timestamp"`
+    Attestations []*core.TEEAttestation `json:"attestations"`
 }
 
-// Convert protocol buffer event to internal format
-func convertEvent(event *proto.Event) (*ShuttleEvent, error) {
-    // Parse timestamp string to time.Time
-    parsedTime, err := time.Parse(time.RFC3339, event.Timestamp)
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse timestamp: %w", err)
+// Validate checks if a ShuttleEvent is valid
+func (e *ShuttleEvent) Validate() error {
+    if e.ID == "" {
+        return fmt.Errorf("empty event ID")
     }
+    if e.FunctionCall == "" {
+        return fmt.Errorf("empty function call")
+    }
+    if len(e.Attestations) == 0 {
+        return fmt.Errorf("no attestations")
+    }
+    return nil
+}
 
-    // Convert the attestations
-    attestations, err := convertProtoAttestations(event.Attestations)
+// ToProto converts a ShuttleEvent to a proto message
+func (e *ShuttleEvent) ToProto() *proto.Event {
+    protoAtts := make([]*proto.TEEAttestation, len(e.Attestations))
+    for i, att := range e.Attestations {
+        protoAtts[i] = &proto.TEEAttestation{
+            EnclaveId:   att.EnclaveID,
+            Measurement: att.Measurement,
+            Timestamp:   e.Timestamp.Format(time.RFC3339),
+        }
+    }
+    
+    return &proto.Event{
+        Id:           e.ID,
+        FunctionCall: e.FunctionCall,
+        Parameters:   e.Parameters,
+        RegionId:     e.RegionID,
+        Timestamp:    e.Timestamp.Format(time.RFC3339),
+        Attestations: protoAtts,
+    }
+}
+
+// FromProto converts a proto message to a ShuttleEvent
+func ShuttleEventFromProto(event *proto.Event) (*ShuttleEvent, error) {
+    if event == nil {
+        return nil, fmt.Errorf("nil event")
+    }
+    
+    // Parse timestamp
+    var timestamp time.Time
+    var err error
+    if event.Timestamp != "" {
+        timestamp, err = time.Parse(time.RFC3339, event.Timestamp)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse timestamp: %w", err)
+        }
+    } else {
+        timestamp = time.Now()
+    }
+    
+    // Convert attestations
+    atts, err := convertProtoAttestations(event.Attestations)
     if err != nil {
         return nil, fmt.Errorf("failed to convert attestations: %w", err)
     }
-
+    
     return &ShuttleEvent{
         ID:           event.Id,
         FunctionCall: event.FunctionCall,
         Parameters:   event.Parameters,
-        Timestamp:    parsedTime.UTC(),
-        Attestations: attestations,
         RegionID:     event.RegionId,
+        Timestamp:    timestamp,
+        Attestations: atts,
     }, nil
 }
 
@@ -115,64 +159,22 @@ func fromProtoAttestation(att *proto.TEEAttestation) (core.TEEAttestation, error
     }, nil
 }
 
-// Helper function to convert slice of proto attestations
-func convertProtoAttestations(protoAtts []*proto.TEEAttestation) ([2]core.TEEAttestation, error) {
-    if len(protoAtts) != 2 {
-        return [2]core.TEEAttestation{}, fmt.Errorf("expected 2 attestations, got %d", len(protoAtts))
-    }
-
-    var result [2]core.TEEAttestation
-    for i, att := range protoAtts {
-        converted, err := fromProtoAttestation(att)
-        if err != nil {
-            return [2]core.TEEAttestation{}, fmt.Errorf("failed to convert attestation %d: %w", i, err)
-        }
-        result[i] = converted
-    }
-
-    return result, nil
-}
-
-// Helper method to convert ShuttleEvent back to proto message
-func (e *ShuttleEvent) ToProto() *proto.Event {
-    protoAtts := make([]*proto.TEEAttestation, 2)
-    for i, att := range e.Attestations {
-        protoAtts[i] = toProtoAttestation(att)
-    }
-
-    return &proto.Event{
-        Id:           e.ID,
-        FunctionCall: e.FunctionCall,
-        Parameters:   e.Parameters,
-        Timestamp:    e.Timestamp.Format(time.RFC3339),
-        Attestations: protoAtts,
-        RegionId:     e.RegionID,
-    }
-}
-
-// Validation helper
-func (e *ShuttleEvent) Validate() error {
-    if e.ID == "" {
-        return fmt.Errorf("empty event ID")
-    }
-    if e.FunctionCall == "" {
-        return fmt.Errorf("empty function call")
-    }
-    if e.RegionID == "" {
-        return fmt.Errorf("empty region ID")
-    }
-    if e.Timestamp.IsZero() {
-        return fmt.Errorf("invalid timestamp")
+// Convert protocol buffer attestation list to internal format
+func convertProtoAttestations(attestations []*proto.TEEAttestation) ([]*core.TEEAttestation, error) {
+    if len(attestations) == 0 {
+        return nil, fmt.Errorf("no attestations provided")
     }
     
-    // Validate attestations
-    for i, att := range e.Attestations {
-        if err := att.Validate(); err != nil {
-            return fmt.Errorf("invalid attestation %d: %w", i, err)
+    result := make([]*core.TEEAttestation, len(attestations))
+    for i, att := range attestations {
+        converted, err := protoToCoreAttestation(att)
+        if err != nil {
+            return nil, fmt.Errorf("failed to convert attestation %d: %w", i, err)
         }
+        result[i] = &converted
     }
-
-    return nil
+    
+    return result, nil
 }
 
 // Convert from proto TEEAttestation to core TEEAttestation
@@ -192,19 +194,19 @@ func protoToCoreAttestation(proto *proto.TEEAttestation) (core.TEEAttestation, e
     }, nil
 }
 
-// Convert slice of proto attestations to fixed-size array of core attestations
-func protoToCoreAttestations(protos []*proto.TEEAttestation) ([2]core.TEEAttestation, error) {
-    if len(protos) != 2 {
-        return [2]core.TEEAttestation{}, fmt.Errorf("expected 2 attestations, got %d", len(protos))
+// protoToCoreAttestations converts a slice of proto attestations to a slice of core attestations
+func protoToCoreAttestations(protos []*proto.TEEAttestation) ([]*core.TEEAttestation, error) {
+    if len(protos) == 0 {
+        return nil, fmt.Errorf("no attestations provided")
     }
     
-    var result [2]core.TEEAttestation
+    result := make([]*core.TEEAttestation, len(protos))
     for i, proto := range protos {
         converted, err := protoToCoreAttestation(proto)
         if err != nil {
-            return [2]core.TEEAttestation{}, err
+            return nil, fmt.Errorf("failed to convert attestation %d: %w", i, err)
         }
-        result[i] = converted
+        result[i] = &converted
     }
     
     return result, nil

@@ -35,7 +35,7 @@ func main() {
     defer cancel()
 
     // Create compute node without passing context
-    node, err := compute.NewComputeNode(*regionID, config)
+    node, err := compute.NewComputeNode(config)
     if err != nil {
         log.Fatalf("Failed to create compute node: %v", err)
     }

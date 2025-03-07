@@ -5,6 +5,7 @@ import (
     "bytes"
     "context"
     "fmt"
+    "sync"
     "time"
 
     "google.golang.org/grpc"
@@ -44,6 +45,102 @@ type Client struct {
     
     // Default timeout for client operations
     defaultTimeout time.Duration
+
+    // Event subscribers
+    eventSubscribers []EventSubscriber
+    mu              sync.RWMutex
+}
+
+// EventSubscriber is the interface for components that want to receive events
+type EventSubscriber interface {
+    OnEvent(ctx context.Context, event *ShuttleEvent) error
+}
+
+// RegisterEventSubscriber registers a subscriber to receive events
+func (c *Client) RegisterEventSubscriber(subscriber EventSubscriber) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    c.eventSubscribers = append(c.eventSubscribers, subscriber)
+    return nil
+}
+
+// notifySubscribers notifies all registered subscribers about an event
+func (c *Client) notifySubscribers(ctx context.Context, event *ShuttleEvent) error {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+
+    for _, subscriber := range c.eventSubscribers {
+        if err := subscriber.OnEvent(ctx, event); err != nil {
+            return fmt.Errorf("subscriber notification failed: %w", err)
+        }
+    }
+
+    return nil
+}
+
+// GetEvent retrieves an event by ID and region
+func (c *Client) GetEvent(ctx context.Context, eventID, regionID string) (*ShuttleEvent, error) {
+    req := &proto.GetEventRequest{
+        EventId: eventID,
+        RegionId: regionID,
+    }
+    
+    // Determine which client to use based on region
+    var client proto.TeeExecutionClient
+    if regionID != "" {
+        if pair, ok := c.regionTEEs[regionID]; ok {
+            client = pair.sgxClient // Use SGX for reads
+        } else {
+            client = c.sgxClient // Fall back to default
+        }
+    } else {
+        client = c.sgxClient
+    }
+    
+    resp, err := client.GetEvent(ctx, req)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get event: %w", err)
+    }
+    
+    if resp.Event == nil {
+        return nil, nil
+    }
+    
+    // Convert proto event to internal format
+    event, err := ShuttleEventFromProto(resp.Event)
+    if err != nil {
+        return nil, fmt.Errorf("failed to convert event: %w", err)
+    }
+    
+    return event, nil
+}
+
+// SetupTestObject creates a test object for testing purposes
+func (c *Client) SetupTestObject(ctx context.Context, objectID, regionID string) error {
+    req := &proto.SetupTestObjectRequest{
+        ObjectId: objectID,
+        RegionId: regionID,
+    }
+    
+    // Use SGX client for test setup
+    var client proto.TeeExecutionClient
+    if regionID != "" {
+        if pair, ok := c.regionTEEs[regionID]; ok {
+            client = pair.sgxClient
+        } else {
+            client = c.sgxClient
+        }
+    } else {
+        client = c.sgxClient
+    }
+    
+    _, err := client.SetupTestObject(ctx, req)
+    if err != nil {
+        return fmt.Errorf("failed to set up test object: %w", err)
+    }
+    
+    return nil
 }
 
 func CreateTEEPair(config *TEEPairConfig) (*TEEPair, error) {
@@ -228,11 +325,11 @@ func (c *Client) ExecuteAction(ctx context.Context, action *actions.SendEventAct
         return fmt.Errorf("failed to convert SEV attestations: %w", err)
     }
 
-    // Verify both attestation sets
-    if err := c.verifier.VerifyAttestationPair(ctx, sgxAtts, nil); err != nil {
+    // Verify both attestation sets - convert to the expected format
+    if err := c.verifyAttestations(ctx, sgxAtts); err != nil {
         return fmt.Errorf("SGX attestation verify failed: %w", err)
     }
-    if err := c.verifier.VerifyAttestationPair(ctx, sevAtts, nil); err != nil {
+    if err := c.verifyAttestations(ctx, sevAtts); err != nil {
         return fmt.Errorf("SEV attestation verify failed: %w", err)
     }
 
@@ -240,7 +337,74 @@ func (c *Client) ExecuteAction(ctx context.Context, action *actions.SendEventAct
     if err := c.compareResults(sgxResult, sevResult); err != nil {
         return err
     }
+    
+    // Extract timestamp and create event for notification
+    if len(sgxResult.Attestations) > 0 && sgxResult.Attestations[0].Timestamp != "" {
+        // Make sure we have attestations to use
+        attestations := make([]*proto.TEEAttestation, 0)
+        attestations = append(attestations, sgxResult.Attestations...)
+        attestations = append(attestations, sevResult.Attestations...)
+        
+        // Get the timestamp from the attestation
+        timestamp := attestations[0].Timestamp
+        
+        // Create an event ID
+        eventID := fmt.Sprintf("%s:%s", action.IDTo, timestamp)
+        
+        // Create an internal ShuttleEvent and notify subscribers
+        timeVal, err := time.Parse(time.RFC3339, timestamp)
+        if err != nil {
+            timeVal = time.Now() // Use current time if parse fails
+        }
+        
+        // Convert attestations to core format
+        combinedAtts, err := protoToCoreAttestations(attestations)
+        if err != nil {
+            return fmt.Errorf("failed to convert attestations: %w", err)
+        }
+        
+        event := &ShuttleEvent{
+            ID:           eventID,
+            FunctionCall: action.FunctionCall,
+            Parameters:   action.Parameters,
+            RegionID:     action.RegionID,
+            Timestamp:    timeVal,
+            Attestations: combinedAtts,
+        }
+        
+        // Notify subscribers about the event
+        if err := c.notifySubscribers(ctx, event); err != nil {
+            return fmt.Errorf("failed to notify subscribers: %w", err)
+        }
+    }
 
+    return nil
+}
+
+// verifyAttestations is a helper method to verify attestations
+// This adapts our new slice-based attestation handling to work with the existing verifier
+func (c *Client) verifyAttestations(ctx context.Context, attestations []*core.TEEAttestation) error {
+    if len(attestations) == 0 {
+        return fmt.Errorf("no attestations to verify")
+    }
+    
+    // If we have exactly 2 attestations, use the pair verification
+    if len(attestations) == 2 {
+        // Create a fixed-size array from the slice
+        var pairAtts [2]core.TEEAttestation
+        pairAtts[0] = *attestations[0]
+        pairAtts[1] = *attestations[1]
+        
+        return c.verifier.VerifyAttestationPair(ctx, pairAtts, nil)
+    }
+    
+    // Otherwise, verify each attestation individually
+    for i, att := range attestations {
+        if err := att.Validate(); err != nil {
+            return fmt.Errorf("attestation %d is invalid: %w", i, err)
+        }
+    }
+    
     return nil
 }
 
@@ -322,10 +486,10 @@ func (c *Client) DeployContract(
     }
 
     // Verify both attestation sets
-    if err := c.verifier.VerifyAttestationPair(ctx, sgxAtts, nil); err != nil {
+    if err := c.verifyAttestations(ctx, sgxAtts); err != nil {
         return "", fmt.Errorf("SGX attestation verify failed: %w", err)
     }
-    if err := c.verifier.VerifyAttestationPair(ctx, sevAtts, nil); err != nil {
+    if err := c.verifyAttestations(ctx, sevAtts); err != nil {
         return "", fmt.Errorf("SEV attestation verify failed: %w", err)
     }
 
@@ -349,24 +513,38 @@ func (c *Client) compareDeployResults(sgxRes, sevRes *proto.DeployContractRespon
     return nil
 }
 
-// CallContract calls a function on a deployed contract in both SGX and SEV TEEs.
-// It verifies that the results from both TEEs match and returns the result.
-func (c *Client) CallContract(ctx context.Context, contractID, functionName string, params []byte, regionID string) ([]byte, error) {
+// CallContractRequest contains parameters for calling a contract
+type CallContractRequest struct {
+    ContractID   string
+    FunctionName string
+    Parameters   []byte
+    RegionID     string
+}
+
+// CallContractResponse contains the result of a contract call
+type CallContractResponse struct {
+    Result       []byte
+    StateHash    []byte
+    Attestations []*proto.TEEAttestation
+}
+
+// CallContract calls a WebAssembly function in a deployed contract
+func (c *Client) CallContract(ctx context.Context, req *CallContractRequest) (*CallContractResponse, error) {
     // Create the request
     request := &proto.CallContractRequest{
-        ContractId:    contractID,
-        FunctionName:  functionName,
-        Parameters:    params,
-        RegionId:      regionID,
+        ContractId:    req.ContractID,
+        FunctionName:  req.FunctionName,
+        Parameters:    req.Parameters,
+        RegionId:      req.RegionID,
         DetailedProof: true,
     }
 
     // Determine which TEE clients to use based on regionID
     var sgxClient, sevClient proto.TeeExecutionClient
-    if regionID != "" {
-        region, exists := c.regionTEEs[regionID]
+    if req.RegionID != "" {
+        region, exists := c.regionTEEs[req.RegionID]
         if !exists {
-            return nil, fmt.Errorf("region %s not found", regionID)
+            return nil, fmt.Errorf("region %s not found", req.RegionID)
         }
         sgxClient = region.sgxClient
         sevClient = region.sevClient
@@ -399,33 +577,31 @@ func (c *Client) CallContract(ctx context.Context, contractID, functionName stri
         return nil, err
     }
 
-    // Verify attestations
-    attestations := [2]core.TEEAttestation{}
-    for i, att := range sgxResp.Attestations {
-        if i >= 2 {
-            break
-        }
-        
-        // Parse timestamp string to time.Time
-        timestamp, err := time.Parse(time.RFC3339, att.Timestamp)
-        if err != nil {
-            return nil, fmt.Errorf("failed to parse attestation timestamp: %w", err)
-        }
-        
-        attestations[i] = core.TEEAttestation{
-            EnclaveID:  att.EnclaveId,
-            Measurement: att.Measurement,
-            Timestamp:  timestamp,
-        }
+    // Verify both attestation sets
+    sgxAtts, err := protoToCoreAttestations(sgxResp.Attestations)
+    if err != nil {
+        return nil, fmt.Errorf("failed to convert SGX attestations: %w", err)
     }
     
-    // Verify attestation pair
-    if err := c.verifier.VerifyAttestationPair(ctx, attestations, nil); err != nil {
-        return nil, fmt.Errorf("attestation verification failed: %w", err)
+    sevAtts, err := protoToCoreAttestations(sevResp.Attestations)
+    if err != nil {
+        return nil, fmt.Errorf("failed to convert SEV attestations: %w", err)
+    }
+    
+    // Use our helper method to verify attestations
+    if err := c.verifyAttestations(ctx, sgxAtts); err != nil {
+        return nil, fmt.Errorf("SGX attestation verify failed: %w", err)
+    }
+    if err := c.verifyAttestations(ctx, sevAtts); err != nil {
+        return nil, fmt.Errorf("SEV attestation verify failed: %w", err)
     }
 
     // Return the result (using SGX response as the canonical one)
-    return sgxResp.Result, nil
+    return &CallContractResponse{
+        Result:     sgxResp.Result,
+        StateHash:  sgxResp.StateHash,
+        Attestations: sgxResp.Attestations,
+    }, nil
 }
 
 // compareCallResults compares the results from SGX and SEV TEEs to ensure they match.

@@ -10,6 +10,8 @@ service TeeExecution {
     rpc GetAttestations(GetAttestationsRequest) returns (RegionAttestations);
     rpc DeployContract(DeployContractRequest) returns (DeployContractResponse);
     rpc CallContract(CallContractRequest) returns (CallContractResponse);
+    rpc GetEvent(GetEventRequest) returns (GetEventResponse);
+    rpc SetupTestObject(SetupTestObjectRequest) returns (SetupTestObjectResponse);
 }
 
 message ExecutionRequest {
@@ -83,6 +85,24 @@ message Event {
     string region_id     = 4;
     string timestamp     = 5;
     repeated TEEAttestation attestations = 6;
+}
+
+message GetEventRequest {
+    string event_id = 1;
+    string region_id = 2;
+}
+
+message GetEventResponse {
+    Event event = 1;
+}
+
+message SetupTestObjectRequest {
+    string object_id = 1;
+    string region_id = 2;
+}
+
+message SetupTestObjectResponse {
+    bool success = 1;
 }
 
 message GetRegionsRequest {}

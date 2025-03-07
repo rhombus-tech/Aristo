@@ -26,7 +26,7 @@ var startComputeCmd = &cobra.Command{
         config.ControllerPath = controllerPath
         config.WasmPath = wasmPath
 
-        node, err := compute.NewComputeNode(regionID, config)
+        node, err := compute.NewComputeNode(config)
         if err != nil {
             return err
         }

@@ -89,8 +89,8 @@ func TestDeployContract(t *testing.T) {
 		}
 
 		_, err := nodeAtCapacity.DeployContract(context.Background(), req)
-		assert.Error(t, err, "Expected error when node is at capacity")
-		assert.Contains(t, err.Error(), "node is at maximum capacity")
+		assert.Error(t, err, "Expected error when node at capacity")
+		assert.Contains(t, err.Error(), "node at capacity")
 	})
 
 	// Test execution error
