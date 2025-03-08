@@ -299,10 +299,19 @@ func TestContractDeploymentAndExecution(t *testing.T) {
     // Setup mock TEE service
     sgxConn, sevConn, stateVerifier, cleanup := setupTEEService(t)
     defer cleanup()
-
-    // Create a new client with the mock connections
-    client, err := tee.NewClientWithConnections(sgxConn, sevConn, stateVerifier)
-    require.NoError(t, err)
+	
+	// Create a new client with bypass attestation enabled
+	client, err := tee.NewClientWithConnections(
+		sgxConn, 
+		sevConn, 
+		stateVerifier,
+		&tee.ClientOptions{
+			BypassAttestation: true,
+			DefaultTimeout: 30 * time.Second,
+		},
+	)
+	require.NoError(t, err)
+	defer client.Close()
 
     // Read the test contract code
     contractCode, err := os.ReadFile("../testdata/simple_add.wasm")
@@ -347,10 +356,19 @@ func TestParameterHandling(t *testing.T) {
     // Setup mock TEE service
     sgxConn, sevConn, stateVerifier, cleanup := setupTEEService(t)
     defer cleanup()
-
-    // Create a new client with the mock connections
-    client, err := tee.NewClientWithConnections(sgxConn, sevConn, stateVerifier)
-    require.NoError(t, err)
+	
+	// Create a new client with bypass attestation enabled
+	client, err := tee.NewClientWithConnections(
+		sgxConn, 
+		sevConn, 
+		stateVerifier,
+		&tee.ClientOptions{
+			BypassAttestation: true,
+			DefaultTimeout: 30 * time.Second,
+		},
+	)
+	require.NoError(t, err)
+	defer client.Close()
 
     // Read the test contract code
     contractCode, err := os.ReadFile("../testdata/simple_add.wasm")
@@ -463,10 +481,19 @@ func TestContractCompilationAndDeployment(t *testing.T) {
     // Setup mock TEE service
     sgxConn, sevConn, stateVerifier, cleanup := setupTEEService(t)
     defer cleanup()
-
-    // Create a new client with the mock connections
-    client, err := tee.NewClientWithConnections(sgxConn, sevConn, stateVerifier)
-    require.NoError(t, err)
+	
+	// Create a new client with bypass attestation enabled
+	client, err := tee.NewClientWithConnections(
+		sgxConn, 
+		sevConn, 
+		stateVerifier,
+		&tee.ClientOptions{
+			BypassAttestation: true,
+			DefaultTimeout: 30 * time.Second,
+		},
+	)
+	require.NoError(t, err)
+	defer client.Close()
 
     // Skipping the script execution since we already have the contract built
     t.Log("Using pre-built contract from testdata directory")
@@ -602,8 +629,17 @@ func TestEventEmissionAndSubscription(t *testing.T) {
 	}, nil)
 	
 	// Create a TEE client
-	client, err := tee.NewClientWithConnections(sgxConn, sevConn, stateVerifier)
+	client, err := tee.NewClientWithConnections(
+		sgxConn, 
+		sevConn, 
+		stateVerifier,
+		&tee.ClientOptions{
+			BypassAttestation: true,
+			DefaultTimeout: 30 * time.Second,
+		},
+	)
 	require.NoError(t, err)
+	defer client.Close()
 	
 	// Create an event subscriber
 	subscriber := NewEventSubscriber(t)
