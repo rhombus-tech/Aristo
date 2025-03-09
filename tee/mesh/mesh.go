@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gabstv/go-bsdiff/pkg/bsdiff"
+	"github.com/gabstv/go-bsdiff/pkg/bspatch"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -51,6 +53,9 @@ type MeshService struct {
 	stateMutex   sync.RWMutex
 	stateCache   map[string]stateInfo
 	lastStateHash []byte
+	// Add a new field for object state storage
+	objectStates map[string][]byte
+	objectStatesMutex sync.RWMutex
 }
 
 // Peer represents a remote TEE in the mesh
@@ -178,6 +183,7 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 		peers:           make(map[string]*Peer),
 		executionHandler: config.Handler,
 		stateCache:       make(map[string]stateInfo),
+		objectStates:     make(map[string][]byte),
 	}, nil
 }
 
@@ -352,16 +358,24 @@ func (m *MeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.
 	
 	// 3. Determine if we need full state transfer or delta update
 	var deltaUpdates []byte
-	var err error
 	
 	// If we have previous state to compare with, generate delta
 	if hasLastState && lastState.timestamp > 0 {
-		// Generate delta update (only changed portions)
-		// This is significantly more bandwidth efficient
-		deltaUpdates, err = m.generateDeltaUpdates(req.ObjectId, lastState.state)
-		if err != nil {
-			// Fall back to full state if delta generation fails
-			deltaUpdates = nil
+		// Get current state
+		currentState, err := m.getStateForObject(req.ObjectId)
+		if err == nil {
+			// Only use delta if it's more efficient
+			if shouldUseDelta(lastState.state, currentState) {
+				// Generate delta update (only changed portions)
+				deltaUpdates, err = m.generateDeltaUpdates(req.ObjectId, lastState.state)
+				if err != nil {
+					// Fall back to full state if delta generation fails
+					deltaUpdates = nil
+				}
+			} else {
+				// Full state transfer is more efficient
+				deltaUpdates = nil
+			}
 		}
 	}
 	
@@ -387,6 +401,87 @@ func (m *MeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.
 	return resp, nil
 }
 
+// handleReceivedSync processes a received sync response with possible delta updates
+func (m *MeshService) handleReceivedSync(senderID string, objectID string, resp *proto.SyncResponse) error {
+	if resp == nil {
+		return fmt.Errorf("received nil sync response")
+	}
+	
+	key := fmt.Sprintf("%s:%s", senderID, objectID)
+	
+	// Apply delta updates if received
+	if resp.DeltaUpdates != nil && len(resp.DeltaUpdates) > 0 {
+		m.stateMutex.RLock()
+		lastStateInfo, exists := m.stateCache[key]
+		m.stateMutex.RUnlock()
+		
+		if !exists {
+			return fmt.Errorf("received delta updates but have no previous state reference")
+		}
+		
+		newState, err := m.applyDeltaUpdates(lastStateInfo.state, resp.DeltaUpdates)
+		if err != nil {
+			return fmt.Errorf("failed to apply delta updates: %w", err)
+		}
+		
+		// Update both stateCache and objectStates
+		m.stateMutex.Lock()
+		m.stateCache[key] = stateInfo{
+			state:     newState,
+			timestamp: resp.TimestampNs,
+		}
+		m.stateMutex.Unlock()
+		
+		// Update the object state
+		m.updateObjectState(objectID, newState)
+	} else if resp.StateHash != nil {
+		// No delta updates, but we have a new state hash
+		// In a full implementation, we would request the full state
+		
+		// For now, just update our cache
+		m.stateMutex.Lock()
+		m.stateCache[key] = stateInfo{
+			state:     resp.StateHash,
+			timestamp: resp.TimestampNs,
+		}
+		m.stateMutex.Unlock()
+	}
+	
+	return nil
+}
+
+// shouldUseDelta determines if using a delta update is more efficient than full state transfer
+// based on size and change percentage
+func shouldUseDelta(oldState, newState []byte) bool {
+	// If either state is missing, can't do delta
+	if len(oldState) == 0 || len(newState) == 0 {
+		return false
+	}
+	
+	// For very small states, full transfer might be more efficient
+	if len(newState) < 256 {
+		return false
+	}
+	
+	// Get a rough estimate of the change percentage
+	// In a real implementation, you would preview the delta size first
+	diffCount := 0
+	minLen := min(len(oldState), len(newState))
+	
+	// Sample up to 100 bytes to estimate change percentage
+	sampleSize := min(minLen, 100)
+	for i := 0; i < sampleSize; i++ {
+		if oldState[i] != newState[i] {
+			diffCount++
+		}
+	}
+	
+	changePercentage := float64(diffCount) / float64(sampleSize)
+	
+	// If states differ too much (>50% change), full transfer is more efficient
+	return changePercentage <= 0.5
+}
+
 // stateInfo tracks state information for delta updates
 type stateInfo struct {
 	state     []byte
@@ -396,16 +491,82 @@ type stateInfo struct {
 // generateDeltaUpdates creates an efficient delta between current and previous state
 // Uses binary diffing for small payloads (reduced CPU cost)
 func (m *MeshService) generateDeltaUpdates(objectID string, previousState []byte) ([]byte, error) {
-	// This is a simplified implementation
-	// A real implementation would:
-	// 1. Access current state for the object
-	// 2. Use an efficient binary diff algorithm (like bsdiff)
-	// 3. Return compressed delta
+	// Get current state for the object
+	currentState, err := m.getStateForObject(objectID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current state for object %s: %w", objectID, err)
+	}
 	
-	// For now, return empty delta as placeholder
-	// In a real implementation, this would be:
-	// return bsdiff.Diff(previousState, currentState)
-	return []byte{}, nil
+	// If no previous state or current state, cannot generate delta
+	if len(previousState) == 0 || len(currentState) == 0 {
+		return nil, fmt.Errorf("cannot generate delta: missing state data")
+	}
+	
+	// Use bsdiff to create an efficient binary diff
+	delta, err := bsdiff.Bytes(previousState, currentState)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate delta: %w", err)
+	}
+	
+	// We don't update lastStateHash here anymore as it's managed by updateObjectState
+	
+	return delta, nil
+}
+
+// getStateForObject retrieves the current state for a given object ID
+// In a real implementation, this would access your state storage system
+func (m *MeshService) getStateForObject(objectID string) ([]byte, error) {
+	// This is a placeholder - in a real implementation, you would:
+	// 1. Access your state storage (database, in-memory store, etc.)
+	// 2. Retrieve the current state for the specified object
+	// 3. Return the state as a byte array
+	
+	// For testing/placeholder, we'll simulate state
+	m.objectStatesMutex.RLock()
+	defer m.objectStatesMutex.RUnlock()
+	
+	// Check if we have any state for this object
+	state, exists := m.objectStates[objectID]
+	if !exists {
+		return nil, fmt.Errorf("no state available for object %s", objectID)
+	}
+	
+	return state, nil
+}
+
+// updateObjectState updates the state for a specific object and updates lastStateHash
+func (m *MeshService) updateObjectState(objectID string, state []byte) {
+	if len(state) == 0 {
+		return
+	}
+	
+	m.objectStatesMutex.Lock()
+	m.objectStates[objectID] = state
+	m.objectStatesMutex.Unlock()
+	
+	// Also update lastStateHash for quick comparisons
+	m.stateMutex.Lock()
+	m.lastStateHash = state
+	m.stateMutex.Unlock()
+}
+
+// applyDeltaUpdates applies a delta patch to a previous state to get the new state
+func (m *MeshService) applyDeltaUpdates(previousState []byte, deltaUpdates []byte) ([]byte, error) {
+	if len(previousState) == 0 {
+		return nil, fmt.Errorf("cannot apply delta: missing previous state")
+	}
+	
+	if len(deltaUpdates) == 0 {
+		return previousState, nil // No changes, return original state
+	}
+	
+	// Apply the bsdiff patch to get the new state
+	newState, err := bspatch.Bytes(previousState, deltaUpdates)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply delta updates: %w", err)
+	}
+	
+	return newState, nil
 }
 
 // ProxyExecute handles execution requests with automatic failover
@@ -803,4 +964,66 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// SyncState synchronizes state with another TEE
+func (m *MeshService) SyncState(teeID string, objectID string) error {
+	peer, err := m.getPeer(teeID)
+	if err != nil {
+		return fmt.Errorf("failed to get peer %s: %w", teeID, err)
+	}
+	
+	client := proto.NewTeeMeshClient(peer.Conn)
+	
+	// Check state cache to determine if we have previous state
+	key := fmt.Sprintf("%s:%s", teeID, objectID)
+	var stateHash []byte
+	var timestampNs int64
+	
+	m.stateMutex.RLock()
+	lastState, hasLastState := m.stateCache[key]
+	if hasLastState {
+		stateHash = lastState.state
+		timestampNs = lastState.timestamp
+	}
+	m.stateMutex.RUnlock()
+	
+	// Build sync request
+	req := &proto.SyncRequest{
+		SenderId:    m.teeID,
+		ObjectId:    objectID,
+		StateHash:   stateHash,
+		TimestampNs: timestampNs,
+	}
+	
+	// Call RPC method
+	resp, err := client.Sync(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("failed to sync with peer %s: %w", teeID, err)
+	}
+	
+	// Process the response
+	if !resp.Success {
+		return fmt.Errorf("sync with peer %s failed", teeID)
+	}
+	
+	// Process any delta updates we received
+	err = m.handleReceivedSync(teeID, objectID, resp)
+	if err != nil {
+		return fmt.Errorf("failed to process sync response: %w", err)
+	}
+	
+	return nil
+}
+
+func (m *MeshService) getPeer(teeID string) (*Peer, error) {
+	m.peerMutex.RLock()
+	defer m.peerMutex.RUnlock()
+	
+	peer, exists := m.peers[teeID]
+	if !exists {
+		return nil, fmt.Errorf("peer %s not found", teeID)
+	}
+	
+	return peer, nil
 }

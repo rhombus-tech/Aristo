@@ -18,7 +18,11 @@ require (
 	google.golang.org/protobuf v1.35.1
 )
 
-require github.com/stretchr/objx v0.5.2 // indirect
+require (
+	github.com/dsnet/compress v0.0.0-20171208185109-cc9eb1d7ad76 // indirect
+	github.com/gabstv/go-bsdiff v1.0.5 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
+)
 
 require (
 	filippo.io/edwards25519 v1.0.0 // indirect
