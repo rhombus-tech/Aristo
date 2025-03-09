@@ -17,6 +17,12 @@ service TeeMesh {
   
   // Sync syncs state between TEEs
   rpc Sync(SyncRequest) returns (SyncResponse) {}
+  
+  // Heartbeat sends and receives TEE attestation and status updates
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+  
+  // GetPeers retrieves a list of attested peers in the region
+  rpc GetPeers(GetPeersRequest) returns (GetPeersResponse) {}
 }
 
 // DiscoveryRequest contains information about the requesting TEE
@@ -88,4 +94,68 @@ message SyncResponse {
   bool success = 1;         // Whether sync was successful
   bytes state_hash = 2;     // New state hash
   int64 timestamp_ns = 3;   // Timestamp in nanoseconds
+}
+
+// HeartbeatRequest sends attestation and status info to peers
+message HeartbeatRequest {
+  string tee_id = 1;        // ID of the sending TEE
+  string tee_type = 2;      // Type of TEE (SGX or SEV)
+  string region_id = 3;     // Region ID
+  string endpoint = 4;      // Network endpoint of the TEE
+  string timestamp = 5;     // Timestamp of this heartbeat
+  
+  // Accumulator attestation data
+  AccumulatorWitness attestation = 6;  // Attestation witness from the accumulator
+}
+
+// HeartbeatResponse confirms receipt of heartbeat
+message HeartbeatResponse {
+  string tee_id = 1;        // ID of the responding TEE
+  string tee_type = 2;      // Type of TEE (SGX or SEV)
+  string region_id = 3;     // Region ID
+  string endpoint = 4;      // Network endpoint of the responding TEE
+  string timestamp = 5;     // Timestamp of this response
+  
+  // Optional witness for the responding TEE
+  AccumulatorWitness attestation = 6;  // Responder's attestation witness
+}
+
+// GetPeersRequest requests a list of peers in the region
+message GetPeersRequest {
+  string tee_id = 1;       // ID of the requesting TEE
+  string region_id = 2;    // Region to get peers for
+  string tee_type = 3;     // Optional filter by TEE type
+}
+
+// GetPeersResponse returns a list of attested peers
+message GetPeersResponse {
+  repeated Peer peers = 1;  // List of peers in the region
+}
+
+// Peer contains information about an attested TEE peer
+message Peer {
+  string tee_id = 1;       // ID of the peer TEE
+  string tee_type = 2;     // Type of TEE
+  string region_id = 3;    // Region ID
+  string endpoint = 4;     // Network endpoint
+  string status = 5;       // Current status (active, degraded, etc.)
+  
+  // Attestation information from accumulator
+  AccumulatorWitness attestation = 6;  // Attestation witness from the accumulator
+}
+
+// AccumulatorWitness contains attestation data from the accumulator
+message AccumulatorWitness {
+  bytes value = 1;               // Current witness value
+  bytes last_accumulator = 2;    // Last known accumulator value
+  AccumulatorElement element = 3; // Element for this TEE
+  uint64 last_update = 4;        // Last update timestamp
+}
+
+// AccumulatorElement represents a single TEE in the accumulator
+message AccumulatorElement {
+  string executor = 1;           // Executor ID (TEE ID)
+  bytes measurement = 2;         // TEE measurement
+  string enclave_type = 3;       // Type of enclave (SGX, SEV)
+  uint64 timestamp = 4;          // Timestamp when added
 }

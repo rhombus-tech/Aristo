@@ -324,10 +324,10 @@ func TestContractDeploymentAndExecution(t *testing.T) {
     functionName := "add"
     
     request := &tee.CallContractRequest{
-        ContractID:   contractID,
+        ContractId:   contractID,
         FunctionName: functionName,
         Parameters:   params,
-        RegionID:     "",
+        RegionId:     "",
     }
     
     result, err := client.CallContract(context.Background(), request)
@@ -398,10 +398,10 @@ func TestParameterHandling(t *testing.T) {
             functionName := "add"
             
             request := &tee.CallContractRequest{
-                ContractID:   contractID,
+                ContractId:   contractID,
                 FunctionName: functionName,
                 Parameters:   params,
-                RegionID:     "",
+                RegionId:     "",
             }
             
             result, err := client.CallContract(context.Background(), request)
@@ -489,10 +489,10 @@ func TestContractCompilationAndDeployment(t *testing.T) {
     functionName := "add"
     
     request := &tee.CallContractRequest{
-        ContractID:   contractID,
+        ContractId:   contractID,
         FunctionName: functionName,
         Parameters:   params,
-        RegionID:     "",
+        RegionId:     "",
     }
     
     result, err := client.CallContract(context.Background(), request)

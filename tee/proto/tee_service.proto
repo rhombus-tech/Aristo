@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package teeservice;
+package proto;
 
 option go_package = "github.com/rhombus-tech/vm/tee/proto";
 
@@ -9,6 +9,9 @@ service TeeExecution {
     rpc GetRegions(GetRegionsRequest) returns (GetRegionsResponse);
     rpc GetAttestations(GetAttestationsRequest) returns (RegionAttestations);
     rpc DeployContract(DeployContractRequest) returns (DeployContractResponse);
+    rpc GetEvent(GetEventRequest) returns (GetEventResponse);
+    rpc SetupTestObject(SetupTestObjectRequest) returns (SetupTestObjectResponse);
+    rpc CallContract(CallContractRequest) returns (CallContractResponse);
 }
 
 message ExecutionRequest {
@@ -75,14 +78,59 @@ message GetAttestationsRequest {
     string region_id = 1;
 }
 
+// GetEventRequest for retrieving events
+message GetEventRequest {
+    string event_id = 1;
+    string region_id = 2;
+}
+
+// GetEventResponse for returning events
+message GetEventResponse {
+    Event event = 1;
+}
+
+// SetupTestObjectRequest for testing
+message SetupTestObjectRequest {
+    string object_id = 1;
+    string region_id = 2;
+}
+
+// SetupTestObjectResponse for testing
+message SetupTestObjectResponse {
+    bool success = 1;
+}
+
 // New message types for contract deployment
 message DeployContractRequest {
     bytes contract_bytes = 1;  // WebAssembly bytecode to deploy
     string region_id = 2;      // Region to deploy the contract to
+    // Added fields to match client.go
+    bytes contract_code = 3;   // Alternative name for contract_bytes
+    bytes init_args = 4;       // Initialization arguments
+    string contract_name = 5;  // Name of the contract
+    bool detailed_proof = 6;   // Whether to include detailed proof
 }
 
 message DeployContractResponse {
     string contract_id = 1;    // Unique identifier for the deployed contract
     string timestamp = 2;      // Timestamp of deployment
     repeated TEEAttestation attestations = 3;  // Optional attestations for the deployment
+    // Added fields to match client.go
+    bytes state_hash = 4;      // Hash of the state after deployment
+}
+
+// CallContractRequest for contract function calls
+message CallContractRequest {
+    string contract_id = 1;    // ID of the contract to call
+    string function_name = 2;  // Name of the function to call
+    bytes parameters = 3;      // Function parameters
+    string region_id = 4;      // Region ID where the contract is deployed
+    bool detailed_proof = 5;   // Whether to include detailed proof
+}
+
+// CallContractResponse for contract function call results
+message CallContractResponse {
+    bytes result = 1;          // Result of the function call
+    bytes state_hash = 2;      // Hash of the state after the call
+    repeated TEEAttestation attestations = 3;  // Attestations for the call
 }

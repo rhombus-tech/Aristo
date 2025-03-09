@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v4.25.2
-// source: tee_mesh.proto
+// source: tee/proto/tee_mesh.proto
 
 package proto
 
@@ -323,5 +323,5 @@ var TeeMesh_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "tee_mesh.proto",
+	Metadata: "tee/proto/tee_mesh.proto",
 }

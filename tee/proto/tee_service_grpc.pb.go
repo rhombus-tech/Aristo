@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v4.25.2
-// source: proto/tee_service.proto
+// source: tee_service.proto
 
 package proto
 
@@ -19,13 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TeeExecution_Execute_FullMethodName         = "/teeservice.TeeExecution/Execute"
-	TeeExecution_GetRegions_FullMethodName      = "/teeservice.TeeExecution/GetRegions"
-	TeeExecution_GetAttestations_FullMethodName = "/teeservice.TeeExecution/GetAttestations"
-	TeeExecution_DeployContract_FullMethodName  = "/teeservice.TeeExecution/DeployContract"
-	TeeExecution_CallContract_FullMethodName    = "/teeservice.TeeExecution/CallContract"
-	TeeExecution_GetEvent_FullMethodName        = "/teeservice.TeeExecution/GetEvent"
-	TeeExecution_SetupTestObject_FullMethodName = "/teeservice.TeeExecution/SetupTestObject"
+	TeeExecution_Execute_FullMethodName         = "/proto.TeeExecution/Execute"
+	TeeExecution_GetRegions_FullMethodName      = "/proto.TeeExecution/GetRegions"
+	TeeExecution_GetAttestations_FullMethodName = "/proto.TeeExecution/GetAttestations"
+	TeeExecution_DeployContract_FullMethodName  = "/proto.TeeExecution/DeployContract"
+	TeeExecution_GetEvent_FullMethodName        = "/proto.TeeExecution/GetEvent"
+	TeeExecution_SetupTestObject_FullMethodName = "/proto.TeeExecution/SetupTestObject"
+	TeeExecution_CallContract_FullMethodName    = "/proto.TeeExecution/CallContract"
 )
 
 // TeeExecutionClient is the client API for TeeExecution service.
@@ -36,9 +36,9 @@ type TeeExecutionClient interface {
 	GetRegions(ctx context.Context, in *GetRegionsRequest, opts ...grpc.CallOption) (*GetRegionsResponse, error)
 	GetAttestations(ctx context.Context, in *GetAttestationsRequest, opts ...grpc.CallOption) (*RegionAttestations, error)
 	DeployContract(ctx context.Context, in *DeployContractRequest, opts ...grpc.CallOption) (*DeployContractResponse, error)
-	CallContract(ctx context.Context, in *CallContractRequest, opts ...grpc.CallOption) (*CallContractResponse, error)
 	GetEvent(ctx context.Context, in *GetEventRequest, opts ...grpc.CallOption) (*GetEventResponse, error)
 	SetupTestObject(ctx context.Context, in *SetupTestObjectRequest, opts ...grpc.CallOption) (*SetupTestObjectResponse, error)
+	CallContract(ctx context.Context, in *CallContractRequest, opts ...grpc.CallOption) (*CallContractResponse, error)
 }
 
 type teeExecutionClient struct {
@@ -89,16 +89,6 @@ func (c *teeExecutionClient) DeployContract(ctx context.Context, in *DeployContr
 	return out, nil
 }
 
-func (c *teeExecutionClient) CallContract(ctx context.Context, in *CallContractRequest, opts ...grpc.CallOption) (*CallContractResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CallContractResponse)
-	err := c.cc.Invoke(ctx, TeeExecution_CallContract_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *teeExecutionClient) GetEvent(ctx context.Context, in *GetEventRequest, opts ...grpc.CallOption) (*GetEventResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetEventResponse)
@@ -119,6 +109,16 @@ func (c *teeExecutionClient) SetupTestObject(ctx context.Context, in *SetupTestO
 	return out, nil
 }
 
+func (c *teeExecutionClient) CallContract(ctx context.Context, in *CallContractRequest, opts ...grpc.CallOption) (*CallContractResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CallContractResponse)
+	err := c.cc.Invoke(ctx, TeeExecution_CallContract_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TeeExecutionServer is the server API for TeeExecution service.
 // All implementations must embed UnimplementedTeeExecutionServer
 // for forward compatibility.
@@ -127,9 +127,9 @@ type TeeExecutionServer interface {
 	GetRegions(context.Context, *GetRegionsRequest) (*GetRegionsResponse, error)
 	GetAttestations(context.Context, *GetAttestationsRequest) (*RegionAttestations, error)
 	DeployContract(context.Context, *DeployContractRequest) (*DeployContractResponse, error)
-	CallContract(context.Context, *CallContractRequest) (*CallContractResponse, error)
 	GetEvent(context.Context, *GetEventRequest) (*GetEventResponse, error)
 	SetupTestObject(context.Context, *SetupTestObjectRequest) (*SetupTestObjectResponse, error)
+	CallContract(context.Context, *CallContractRequest) (*CallContractResponse, error)
 	mustEmbedUnimplementedTeeExecutionServer()
 }
 
@@ -152,14 +152,14 @@ func (UnimplementedTeeExecutionServer) GetAttestations(context.Context, *GetAtte
 func (UnimplementedTeeExecutionServer) DeployContract(context.Context, *DeployContractRequest) (*DeployContractResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeployContract not implemented")
 }
-func (UnimplementedTeeExecutionServer) CallContract(context.Context, *CallContractRequest) (*CallContractResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CallContract not implemented")
-}
 func (UnimplementedTeeExecutionServer) GetEvent(context.Context, *GetEventRequest) (*GetEventResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetEvent not implemented")
 }
 func (UnimplementedTeeExecutionServer) SetupTestObject(context.Context, *SetupTestObjectRequest) (*SetupTestObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetupTestObject not implemented")
+}
+func (UnimplementedTeeExecutionServer) CallContract(context.Context, *CallContractRequest) (*CallContractResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CallContract not implemented")
 }
 func (UnimplementedTeeExecutionServer) mustEmbedUnimplementedTeeExecutionServer() {}
 func (UnimplementedTeeExecutionServer) testEmbeddedByValue()                      {}
@@ -254,24 +254,6 @@ func _TeeExecution_DeployContract_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TeeExecution_CallContract_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CallContractRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TeeExecutionServer).CallContract(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TeeExecution_CallContract_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TeeExecutionServer).CallContract(ctx, req.(*CallContractRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _TeeExecution_GetEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetEventRequest)
 	if err := dec(in); err != nil {
@@ -308,11 +290,29 @@ func _TeeExecution_SetupTestObject_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TeeExecution_CallContract_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CallContractRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeExecutionServer).CallContract(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeExecution_CallContract_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeExecutionServer).CallContract(ctx, req.(*CallContractRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TeeExecution_ServiceDesc is the grpc.ServiceDesc for TeeExecution service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var TeeExecution_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "teeservice.TeeExecution",
+	ServiceName: "proto.TeeExecution",
 	HandlerType: (*TeeExecutionServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -332,10 +332,6 @@ var TeeExecution_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TeeExecution_DeployContract_Handler,
 		},
 		{
-			MethodName: "CallContract",
-			Handler:    _TeeExecution_CallContract_Handler,
-		},
-		{
 			MethodName: "GetEvent",
 			Handler:    _TeeExecution_GetEvent_Handler,
 		},
@@ -343,7 +339,11 @@ var TeeExecution_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "SetupTestObject",
 			Handler:    _TeeExecution_SetupTestObject_Handler,
 		},
+		{
+			MethodName: "CallContract",
+			Handler:    _TeeExecution_CallContract_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/tee_service.proto",
+	Metadata: "tee_service.proto",
 }

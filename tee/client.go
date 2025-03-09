@@ -534,11 +534,11 @@ func (c *Client) DeployContract(
     
     // Build the request proto
     req := &proto.DeployContractRequest{
-        ContractCode:   contractCode,
-        InitArgs:       initArgs,
-        RegionId:       regionID,
-        ContractName:   contractName,
-        DetailedProof:  true, // Enable detailed proof by default
+        ContractCode:  contractCode,
+        InitArgs:      initArgs,
+        RegionId:      regionID,
+        ContractName:  contractName,
+        DetailedProof: true, // Enable detailed proof by default
     }
 
     var sgxResult, sevResult *proto.DeployContractResponse
@@ -614,10 +614,10 @@ func (c *Client) compareDeployResults(sgxRes, sevRes *proto.DeployContractRespon
 
 // CallContractRequest contains parameters for calling a contract
 type CallContractRequest struct {
-    ContractID   string
+    ContractId   string
     FunctionName string
     Parameters   []byte
-    RegionID     string
+    RegionId     string
 }
 
 // CallContractResponse contains the result of a contract call
@@ -631,19 +631,19 @@ type CallContractResponse struct {
 func (c *Client) CallContract(ctx context.Context, req *CallContractRequest) (*CallContractResponse, error) {
     // Create the request
     request := &proto.CallContractRequest{
-        ContractId:    req.ContractID,
+        ContractId:    req.ContractId,
         FunctionName:  req.FunctionName,
         Parameters:    req.Parameters,
-        RegionId:      req.RegionID,
+        RegionId:      req.RegionId,
         DetailedProof: true,
     }
 
     // Determine which TEE clients to use based on regionID
     var sgxClient, sevClient proto.TeeExecutionClient
-    if req.RegionID != "" {
-        region, exists := c.regionTEEs[req.RegionID]
+    if req.RegionId != "" {
+        region, exists := c.regionTEEs[req.RegionId]
         if !exists {
-            return nil, fmt.Errorf("region %s not found", req.RegionID)
+            return nil, fmt.Errorf("region %s not found", req.RegionId)
         }
         sgxClient = region.sgxClient
         sevClient = region.sevClient
