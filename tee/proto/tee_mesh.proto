@@ -118,6 +118,7 @@ message SyncResponse {
   bool success = 1;         // Whether sync was successful
   bytes state_hash = 2;     // New state hash
   int64 timestamp_ns = 3;   // Timestamp in nanoseconds
+  bytes delta_updates = 4;  // Efficient binary diff for incremental state updates
 }
 
 // HeartbeatRequest sends attestation and status info to peers
