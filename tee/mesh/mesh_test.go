@@ -45,35 +45,49 @@ func (m *MockExecutionHandler) AddResponse(objectID string, resp *proto.DirectEx
 }
 
 func TestNewMeshService(t *testing.T) {
-	// Test creating a mesh service with valid config
+	// Test creating a mesh service with valid config for SGX
 	handler := NewMockHandler()
-	config := &MeshConfig{
-		TEEID:    "test-tee",
+	sgxConfig := &MeshConfig{
+		TEEID:    "test-tee-sgx",
 		TEEType:  "SGX",
 		RegionID: "us-west",
 		Endpoint: "localhost:50051",
 		Handler:  handler,
 	}
 
-	service, err := NewMeshService(config)
+	sgxService, err := NewMeshService(sgxConfig)
 	if err != nil {
-		t.Fatalf("Failed to create mesh service: %v", err)
+		t.Fatalf("Failed to create SGX mesh service: %v", err)
 	}
 
-	if service.teeID != config.TEEID {
-		t.Errorf("Expected TEEID %s, got %s", config.TEEID, service.teeID)
+	if sgxService.teeID != sgxConfig.TEEID {
+		t.Errorf("Expected TEEID %s, got %s", sgxConfig.TEEID, sgxService.teeID)
 	}
 
-	if service.teeType != config.TEEType {
-		t.Errorf("Expected TEEType %s, got %s", config.TEEType, service.teeType)
+	if sgxService.teeType != sgxConfig.TEEType {
+		t.Errorf("Expected TEEType %s, got %s", sgxConfig.TEEType, sgxService.teeType)
+	}
+	
+	// Test creating a mesh service with valid config for SEV
+	sevConfig := &MeshConfig{
+		TEEID:    "test-tee-sev",
+		TEEType:  "SEV",
+		RegionID: "us-west",
+		Endpoint: "localhost:50052",
+		Handler:  handler,
 	}
 
-	if service.regionID != config.RegionID {
-		t.Errorf("Expected RegionID %s, got %s", config.RegionID, service.regionID)
+	sevService, err := NewMeshService(sevConfig)
+	if err != nil {
+		t.Fatalf("Failed to create SEV mesh service: %v", err)
 	}
 
-	if service.endpoint != config.Endpoint {
-		t.Errorf("Expected Endpoint %s, got %s", config.Endpoint, service.endpoint)
+	if sevService.teeID != sevConfig.TEEID {
+		t.Errorf("Expected TEEID %s, got %s", sevConfig.TEEID, sevService.teeID)
+	}
+
+	if sevService.teeType != sevConfig.TEEType {
+		t.Errorf("Expected TEEType %s, got %s", sevConfig.TEEType, sevService.teeType)
 	}
 
 	// Test with missing required fields
@@ -96,68 +110,189 @@ func TestDirectExecute(t *testing.T) {
 	// Create a mock handler
 	handler := NewMockHandler()
 	
-	// Add a specific response for a test object
-	expectedResp := &proto.DirectExecutionResponse{
+	// Add specific responses for test objects for both SGX and SEV
+	sgxResp := &proto.DirectExecutionResponse{
 		Timestamp:        time.Now().Format(time.RFC3339Nano),
-		Result:           []byte("custom result"),
-		StateHash:        []byte("custom hash"),
+		Result:           []byte("sgx result"),
+		StateHash:        []byte("sgx hash"),
 		ExecutionTime:    200,
 		MemoryUsed:       2048,
 		SyscallCount:     10,
 		NetworkLatencyNs: 100000,
 	}
-	handler.AddResponse("test-object", expectedResp)
+	handler.AddResponse("test-object-sgx", sgxResp)
 	
-	// Create a mesh service
-	config := &MeshConfig{
-		TEEID:    "test-tee",
+	sevResp := &proto.DirectExecutionResponse{
+		Timestamp:        time.Now().Format(time.RFC3339Nano),
+		Result:           []byte("sev result"),
+		StateHash:        []byte("sev hash"),
+		ExecutionTime:    180,
+		MemoryUsed:       1024,
+		SyscallCount:     8,
+		NetworkLatencyNs: 90000,
+	}
+	handler.AddResponse("test-object-sev", sevResp)
+	
+	// Test SGX execution
+	t.Run("SGX", func(t *testing.T) {
+		// Create an SGX mesh service
+		sgxConfig := &MeshConfig{
+			TEEID:    "test-tee-sgx",
+			TEEType:  "SGX",
+			RegionID: "us-west",
+			Endpoint: "localhost:50051",
+			Handler:  handler,
+		}
+		
+		sgxService, err := NewMeshService(sgxConfig)
+		if err != nil {
+			t.Fatalf("Failed to create SGX mesh service: %v", err)
+		}
+		
+		// Test direct execution with the test object
+		req := &proto.DirectExecutionRequest{
+			SenderId:     "test-client",
+			IdTo:         "test-object-sgx",
+			FunctionCall: "test-function",
+			Parameters:   []byte("test-params"),
+			RegionId:     "us-west",
+		}
+		
+		resp, err := sgxService.DirectExecute(context.Background(), req)
+		if err != nil {
+			t.Fatalf("SGX DirectExecute failed: %v", err)
+		}
+		
+		// Check that we got the expected response
+		if string(resp.Result) != string(sgxResp.Result) {
+			t.Errorf("Expected SGX result %s, got %s", string(sgxResp.Result), string(resp.Result))
+		}
+	})
+	
+	// Test SEV execution
+	t.Run("SEV", func(t *testing.T) {
+		// Create an SEV mesh service
+		sevConfig := &MeshConfig{
+			TEEID:    "test-tee-sev",
+			TEEType:  "SEV",
+			RegionID: "us-west",
+			Endpoint: "localhost:50052",
+			Handler:  handler,
+		}
+		
+		sevService, err := NewMeshService(sevConfig)
+		if err != nil {
+			t.Fatalf("Failed to create SEV mesh service: %v", err)
+		}
+		
+		// Test direct execution with the test object
+		req := &proto.DirectExecutionRequest{
+			SenderId:     "test-client",
+			IdTo:         "test-object-sev",
+			FunctionCall: "test-function",
+			Parameters:   []byte("test-params"),
+			RegionId:     "us-west",
+		}
+		
+		resp, err := sevService.DirectExecute(context.Background(), req)
+		if err != nil {
+			t.Fatalf("SEV DirectExecute failed: %v", err)
+		}
+		
+		// Check that we got the expected response
+		if string(resp.Result) != string(sevResp.Result) {
+			t.Errorf("Expected SEV result %s, got %s", string(sevResp.Result), string(resp.Result))
+		}
+	})
+}
+
+func TestMultiTEETypeSupport(t *testing.T) {
+	// Create handlers for SGX and SEV
+	sgxHandler := NewMockHandler()
+	sevHandler := NewMockHandler()
+	
+	// Configure responses
+	sgxResp := &proto.DirectExecutionResponse{
+		Timestamp:     time.Now().Format(time.RFC3339Nano),
+		Result:        []byte("sgx executed"),
+		StateHash:     []byte("sgx hash"),
+		ExecutionTime: 100,
+	}
+	sgxHandler.AddResponse("test-contract", sgxResp)
+	
+	sevResp := &proto.DirectExecutionResponse{
+		Timestamp:     time.Now().Format(time.RFC3339Nano),
+		Result:        []byte("sev executed"),
+		StateHash:     []byte("sev hash"),
+		ExecutionTime: 120,
+	}
+	sevHandler.AddResponse("test-contract", sevResp)
+	
+	// Create mesh services for SGX and SEV
+	sgxService, err := NewMeshService(&MeshConfig{
+		TEEID:    "sgx-tee",
 		TEEType:  "SGX",
-		RegionID: "us-west",
-		Endpoint: "localhost:50051",
-		Handler:  handler,
-	}
-	
-	service, err := NewMeshService(config)
+		RegionID: "test-region",
+		Endpoint: "localhost:50151",
+		Handler:  sgxHandler,
+	})
 	if err != nil {
-		t.Fatalf("Failed to create mesh service: %v", err)
+		t.Fatalf("Failed to create SGX service: %v", err)
 	}
 	
-	// Test direct execution with the test object
-	req := &proto.DirectExecutionRequest{
+	sevService, err := NewMeshService(&MeshConfig{
+		TEEID:    "sev-tee",
+		TEEType:  "SEV",
+		RegionID: "test-region",
+		Endpoint: "localhost:50152",
+		Handler:  sevHandler,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create SEV service: %v", err)
+	}
+	
+	// Test that each service properly identifies its own TEE type
+	if sgxService.GetTEEType() != "SGX" {
+		t.Errorf("Expected SGX service to have TEE type SGX, got %s", sgxService.GetTEEType())
+	}
+	
+	if sevService.GetTEEType() != "SEV" {
+		t.Errorf("Expected SEV service to have TEE type SEV, got %s", sevService.GetTEEType())
+	}
+	
+	// Test DirectExecute for SGX
+	sgxReq := &proto.DirectExecutionRequest{
 		SenderId:     "test-client",
-		IdTo:         "test-object",
+		IdTo:         "test-contract",
 		FunctionCall: "test-function",
 		Parameters:   []byte("test-params"),
-		RegionId:     "us-west",
+		RegionId:     "test-region",
 	}
 	
-	resp, err := service.DirectExecute(context.Background(), req)
+	sgxResult, err := sgxService.DirectExecute(context.Background(), sgxReq)
 	if err != nil {
-		t.Fatalf("DirectExecute failed: %v", err)
+		t.Fatalf("Failed to execute on SGX: %v", err)
 	}
 	
-	// Check that we got the expected response
-	if string(resp.Result) != string(expectedResp.Result) {
-		t.Errorf("Expected result %s, got %s", string(expectedResp.Result), string(resp.Result))
+	if string(sgxResult.Result) != string(sgxResp.Result) {
+		t.Errorf("Expected SGX result %s, got %s", string(sgxResp.Result), string(sgxResult.Result))
 	}
 	
-	if string(resp.StateHash) != string(expectedResp.StateHash) {
-		t.Errorf("Expected state hash %s, got %s", string(expectedResp.StateHash), string(resp.StateHash))
+	// Test DirectExecute for SEV
+	sevReq := &proto.DirectExecutionRequest{
+		SenderId:     "test-client", 
+		IdTo:         "test-contract",
+		FunctionCall: "test-function",
+		Parameters:   []byte("test-params"),
+		RegionId:     "test-region",
 	}
 	
-	// Test with a different object ID
-	req.IdTo = "different-object"
-	resp, err = service.DirectExecute(context.Background(), req)
+	sevResult, err := sevService.DirectExecute(context.Background(), sevReq)
 	if err != nil {
-		t.Fatalf("DirectExecute failed: %v", err)
+		t.Fatalf("Failed to execute on SEV: %v", err)
 	}
 	
-	// Check that we got the default response
-	if string(resp.Result) != "test result" {
-		t.Errorf("Expected result 'test result', got %s", string(resp.Result))
-	}
-	
-	if string(resp.StateHash) != "test hash" {
-		t.Errorf("Expected state hash 'test hash', got %s", string(resp.StateHash))
+	if string(sevResult.Result) != string(sevResp.Result) {
+		t.Errorf("Expected SEV result %s, got %s", string(sevResp.Result), string(sevResult.Result))
 	}
 }

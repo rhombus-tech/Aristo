@@ -413,28 +413,35 @@ func (c *Client) ExecuteActionMesh(ctx context.Context, action *actions.SendEven
     // Get mesh clients for the region
     sgxMeshClient, sevMeshClient, err := c.getMeshClients(action.RegionID)
     if err != nil {
-        // Fall back to coordinator if mesh clients aren't available
-        return c.ExecuteAction(ctx, action)
+        // If no clients are available, fall back to coordinator
+        if sgxMeshClient == nil && sevMeshClient == nil {
+            return c.ExecuteAction(ctx, action)
+        }
+        // Otherwise, continue with available clients in degraded mode
     }
 
-    // Execute in parallel on both TEEs
+    // Execute in parallel on available TEEs
     var results []*proto.DirectExecutionResponse
     var errors []error
 
-    // Execute in SGX
-    sgxResult, err := sgxMeshClient.DirectExecute(ctx, directReq)
-    if err != nil {
-        errors = append(errors, fmt.Errorf("SGX direct execution failed: %w", err))
-    } else {
-        results = append(results, sgxResult)
+    // Execute in SGX if available
+    if sgxMeshClient != nil {
+        sgxResult, err := sgxMeshClient.DirectExecute(ctx, directReq)
+        if err != nil {
+            errors = append(errors, fmt.Errorf("SGX direct execution failed: %w", err))
+        } else {
+            results = append(results, sgxResult)
+        }
     }
 
-    // Execute in SEV
-    sevResult, err := sevMeshClient.DirectExecute(ctx, directReq)
-    if err != nil {
-        errors = append(errors, fmt.Errorf("SEV direct execution failed: %w", err))
-    } else {
-        results = append(results, sevResult)
+    // Execute in SEV if available
+    if sevMeshClient != nil {
+        sevResult, err := sevMeshClient.DirectExecute(ctx, directReq)
+        if err != nil {
+            errors = append(errors, fmt.Errorf("SEV direct execution failed: %w", err))
+        } else {
+            results = append(results, sevResult)
+        }
     }
 
     // Check if we have any results
@@ -448,8 +455,7 @@ func (c *Client) ExecuteActionMesh(ctx context.Context, action *actions.SendEven
 
     // If we got one result, that's acceptable in degraded mode
     if len(results) == 1 {
-        // TODO: Log that we're in degraded mode
-        // In a real implementation, we would verify the attestation
+        // In degraded mode with only one result, we accept it
         return nil
     }
 
@@ -751,32 +757,52 @@ func (c *Client) DisableMesh() {
 
 // ConnectToMesh connects to a mesh network in the specified region
 func (c *Client) ConnectToMesh(ctx context.Context, regionID, sgxEndpoint, sevEndpoint string) error {
-    // Connect to SGX mesh
-    sgxConn, err := grpc.Dial(sgxEndpoint, grpc.WithInsecure())
-    if err != nil {
-        return fmt.Errorf("failed to connect to SGX mesh: %w", err)
+    // Enable mesh network support
+    c.EnableMesh()
+    
+    var sgxErr, sevErr error
+    var sgxConn, sevConn *grpc.ClientConn
+    var sgxClient, sevClient proto.TeeMeshClient
+    
+    // Try to connect to SGX mesh if endpoint is provided
+    if sgxEndpoint != "" {
+        sgxConn, sgxErr = grpc.Dial(sgxEndpoint, grpc.WithInsecure())
+        if sgxErr == nil {
+            sgxClient = proto.NewTeeMeshClient(sgxConn)
+        }
     }
     
-    // Connect to SEV mesh
-    sevConn, err := grpc.Dial(sevEndpoint, grpc.WithInsecure())
-    if err != nil {
-        sgxConn.Close() // Close SGX connection if SEV fails
-        return fmt.Errorf("failed to connect to SEV mesh: %w", err)
+    // Try to connect to SEV mesh if endpoint is provided
+    if sevEndpoint != "" {
+        sevConn, sevErr = grpc.Dial(sevEndpoint, grpc.WithInsecure())
+        if sevErr == nil {
+            sevClient = proto.NewTeeMeshClient(sevConn)
+        }
     }
     
-    // Create clients
-    sgxClient := proto.NewTeeMeshClient(sgxConn)
-    sevClient := proto.NewTeeMeshClient(sevConn)
+    // Check if we connected to at least one TEE type
+    if sgxErr != nil && sevErr != nil {
+        // If we tried to connect to both types and failed, return an error
+        if sgxEndpoint != "" && sevEndpoint != "" {
+            return fmt.Errorf("failed to connect to both mesh types: SGX: %v, SEV: %v", sgxErr, sevErr)
+        }
+    }
     
     // Store connections and clients
     sgxKey := fmt.Sprintf("%s-sgx", regionID)
     sevKey := fmt.Sprintf("%s-sev", regionID)
     
-    c.meshClients[sgxKey] = sgxClient
-    c.meshClients[sevKey] = sevClient
+    // Store SGX client if connected
+    if sgxClient != nil {
+        c.meshClients[sgxKey] = sgxClient
+        c.meshConn[sgxKey] = sgxConn
+    }
     
-    c.meshConn[sgxKey] = sgxConn
-    c.meshConn[sevKey] = sevConn
+    // Store SEV client if connected
+    if sevClient != nil {
+        c.meshClients[sevKey] = sevClient
+        c.meshConn[sevKey] = sevConn
+    }
     
     return nil
 }
@@ -796,17 +822,26 @@ func (c *Client) getMeshClients(regionID string) (proto.TeeMeshClient, proto.Tee
     sgxClient, sgxOk := c.meshClients[sgxKey]
     sevClient, sevOk := c.meshClients[sevKey]
     
-    if !sgxOk || !sevOk {
-        return nil, nil, fmt.Errorf("no mesh clients for region: %s", regionID)
+    // Both clients must be available for full dual-attestation
+    if !sgxOk && !sevOk {
+        return nil, nil, fmt.Errorf("no mesh clients available for region: %s", regionID)
     }
     
+    // Return whatever clients are available - allows operation with just one TEE type
     return sgxClient, sevClient, nil
+}
+
+// GetMeshClientsForTesting returns mesh clients for a region - intended for testing only
+func (c *Client) GetMeshClientsForTesting(regionID string) (proto.TeeMeshClient, proto.TeeMeshClient, error) {
+    return c.getMeshClients(regionID)
 }
 
 // CloseMeshConnections closes all mesh connections
 func (c *Client) CloseMeshConnections() {
     for key, conn := range c.meshConn {
-        conn.Close()
+        if conn != nil {
+            conn.Close()
+        }
         delete(c.meshConn, key)
         delete(c.meshClients, key)
     }

@@ -344,6 +344,11 @@ func (m *MeshService) GetTEEID() string {
 	return m.teeID
 }
 
+// GetTEEType returns the TEE type for this service
+func (s *MeshService) GetTEEType() string {
+    return s.teeType
+}
+
 // createTLSConfig creates a TLS configuration from cert and key files
 func createTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
