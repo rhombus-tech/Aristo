@@ -12,6 +12,9 @@ service TeeMesh {
   // DirectExecute allows one TEE to directly execute operations on another
   rpc DirectExecute(DirectExecutionRequest) returns (DirectExecutionResponse) {}
   
+  // ProxyExecute allows execution with automatic failover between TEEs
+  rpc ProxyExecute(ProxyExecutionRequest) returns (DirectExecutionResponse) {}
+  
   // Ping is a simple health check
   rpc Ping(PingRequest) returns (PingResponse) {}
   
@@ -59,6 +62,25 @@ message DirectExecutionRequest {
   bool bypass_coordinator = 8; // Whether to bypass the regional coordinator
 }
 
+// ProxyExecutionRequest extends DirectExecutionRequest with failover options
+message ProxyExecutionRequest {
+  string sender_id = 1;     // ID of the requesting TEE
+  string id_to = 2;         // Contract ID or object ID
+  string function_call = 3; // Function to call
+  bytes parameters = 4;     // Function parameters
+  string region_id = 5;     // Region ID
+  bool detailed_proof = 6;  // Whether to include detailed proof
+  bytes expected_hash = 7;  // Expected state hash (optional)
+  bool bypass_coordinator = 8; // Whether to bypass the regional coordinator
+  
+  // Failover specific fields
+  string preferred_tee_type = 9; // Preferred TEE type (SGX, SEV)
+  int32 max_retries = 10;        // Maximum number of retries
+  int32 timeout_ms = 11;         // Timeout in milliseconds
+  repeated string excluded_peers = 12; // TEE IDs to exclude
+  bool cross_region_allowed = 13; // Whether cross-region execution is allowed
+}
+
 // DirectExecutionResponse contains the result of direct execution
 message DirectExecutionResponse {
   string timestamp = 1;      // Execution timestamp
@@ -68,6 +90,8 @@ message DirectExecutionResponse {
   uint64 memory_used = 5;    // Memory used during execution
   uint64 syscall_count = 6;  // Number of syscalls made
   uint64 network_latency_ns = 7; // Network latency in nanoseconds
+  string sender_id = 8;      // ID of the TEE that executed the request
+  bool success = 9;          // Whether execution was successful
 }
 
 // PingRequest is a simple ping message
@@ -98,7 +122,7 @@ message SyncResponse {
 
 // HeartbeatRequest sends attestation and status info to peers
 message HeartbeatRequest {
-  string tee_id = 1;        // ID of the sending TEE
+  string sender_id = 1;     // ID of the sending TEE
   string tee_type = 2;      // Type of the TEE (SGX or SEV)
   string region_id = 3;     // Region ID
   string endpoint = 4;      // Network endpoint
@@ -116,6 +140,7 @@ message HeartbeatResponse {
   string timestamp = 5;     // Response timestamp
   AccumulatorWitness attestation = 6; // Attestation data
   bytes tls_certificate = 7; // TLS certificate for secure communication
+  string status = 8;        // Status of the responding TEE
 }
 
 // GetPeersRequest requests a list of peers in the region

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -372,4 +373,176 @@ func createTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    certPool,
 	}, nil
+}
+
+// ProxyExecute handles execution requests with automatic failover
+func (m *MeshService) ProxyExecute(ctx context.Context, req *proto.ProxyExecutionRequest) (*proto.DirectExecutionResponse, error) {
+	// 1. Try to execute locally if this TEE is the target
+	if req.IdTo == m.teeID {
+		// Convert ProxyExecutionRequest to DirectExecutionRequest
+		directReq := &proto.DirectExecutionRequest{
+			SenderId:          req.SenderId,
+			IdTo:              req.IdTo,
+			FunctionCall:      req.FunctionCall,
+			Parameters:        req.Parameters,
+			RegionId:          req.RegionId,
+			DetailedProof:     req.DetailedProof,
+			ExpectedHash:      req.ExpectedHash,
+			BypassCoordinator: req.BypassCoordinator,
+		}
+		
+		return m.DirectExecute(ctx, directReq)
+	}
+	
+	// 2. Try to execute on the target peer if it's available
+	targetPeer, exists := m.GetPeer(req.IdTo)
+	if exists && targetPeer.Status == "active" {
+		// Check if the target peer is in excluded peers list
+		excluded := false
+		for _, excludedID := range req.ExcludedPeers {
+			if excludedID == req.IdTo {
+				excluded = true
+				break
+			}
+		}
+		
+		if !excluded {
+			// Try direct execution on target
+			start := time.Now()
+			directReq := &proto.DirectExecutionRequest{
+				SenderId:          req.SenderId,
+				IdTo:              req.IdTo,
+				FunctionCall:      req.FunctionCall,
+				Parameters:        req.Parameters,
+				RegionId:          req.RegionId,
+				DetailedProof:     req.DetailedProof,
+				ExpectedHash:      req.ExpectedHash,
+				BypassCoordinator: req.BypassCoordinator,
+			}
+			
+			resp, err := targetPeer.MeshClient.DirectExecute(ctx, directReq)
+			if err == nil {
+				// Successful execution
+				resp.NetworkLatencyNs = uint64(time.Since(start).Nanoseconds())
+				return resp, nil
+			}
+			
+			// If we reach here, there was an error executing on the target peer
+			fmt.Printf("Failed to execute on target peer %s: %v\n", req.IdTo, err)
+		}
+	}
+	
+	// 3. Failover to another peer based on preferred TEE type
+	eligiblePeers := make([]*Peer, 0)
+	
+	m.peerMutex.RLock()
+	for id, peer := range m.peers {
+		// Skip if peer is in excluded list
+		excluded := false
+		for _, excludedID := range req.ExcludedPeers {
+			if excludedID == id {
+				excluded = true
+				break
+			}
+		}
+		
+		if excluded {
+			continue
+		}
+		
+		// Skip if peer is not active
+		if peer.Status != "active" {
+			continue
+		}
+		
+		// Skip if peer is in a different region and cross-region is not allowed
+		if peer.RegionID != req.RegionId && !req.CrossRegionAllowed {
+			continue
+		}
+		
+		// Add to eligible peers
+		eligiblePeers = append(eligiblePeers, peer)
+	}
+	m.peerMutex.RUnlock()
+	
+	// Sort peers by preferred TEE type
+	if req.PreferredTeeType != "" {
+		sort.SliceStable(eligiblePeers, func(i, j int) bool {
+			// Preferred TEE type comes first
+			if eligiblePeers[i].TEEType == req.PreferredTeeType && eligiblePeers[j].TEEType != req.PreferredTeeType {
+				return true
+			}
+			
+			// Then sort by region (prefer same region)
+			if eligiblePeers[i].RegionID == req.RegionId && eligiblePeers[j].RegionID != req.RegionId {
+				return true
+			}
+			
+			return false
+		})
+	}
+	
+	// Try eligible peers until one succeeds or we run out of retries
+	maxRetries := int(req.MaxRetries)
+	if maxRetries <= 0 {
+		maxRetries = 3 // Default to 3 retries
+	}
+	
+	// Set a context timeout if specified
+	var cancelFunc context.CancelFunc
+	if req.TimeoutMs > 0 {
+		ctx, cancelFunc = context.WithTimeout(ctx, time.Duration(req.TimeoutMs)*time.Millisecond)
+		defer cancelFunc()
+	}
+	
+	// Try each eligible peer
+	for i := 0; i < min(len(eligiblePeers), maxRetries); i++ {
+		peer := eligiblePeers[i]
+		
+		// Skip the original target peer since we already tried it
+		if peer.TEEID == req.IdTo {
+			continue
+		}
+		
+		// Try execution on this peer
+		start := time.Now()
+		directReq := &proto.DirectExecutionRequest{
+			SenderId:          req.SenderId,
+			IdTo:              peer.TEEID, // Change target to the failover peer
+			FunctionCall:      req.FunctionCall,
+			Parameters:        req.Parameters,
+			RegionId:          req.RegionId,
+			DetailedProof:     req.DetailedProof,
+			ExpectedHash:      req.ExpectedHash,
+			BypassCoordinator: req.BypassCoordinator,
+		}
+		
+		resp, err := peer.MeshClient.DirectExecute(ctx, directReq)
+		if err == nil {
+			// Successful execution
+			resp.NetworkLatencyNs = uint64(time.Since(start).Nanoseconds())
+			return resp, nil
+		}
+		
+		fmt.Printf("Failed to execute on failover peer %s: %v\n", peer.TEEID, err)
+		
+		// Check if context is done
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			// Continue to next peer
+		}
+	}
+	
+	// If we reach here, all attempts failed
+	return nil, fmt.Errorf("all execution attempts failed after %d retries", maxRetries)
+}
+
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

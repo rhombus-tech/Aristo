@@ -271,7 +271,7 @@ func (d *DiscoveryService) sendHeartbeats() {
 		}
 		
 		req := &pb.HeartbeatRequest{
-			TeeId:      d.config.TEEID,
+			SenderId:   d.config.TEEID,
 			TeeType:    d.config.TEEType,
 			RegionId:   d.config.RegionID,
 			Endpoint:   d.config.Endpoint,
@@ -483,11 +483,11 @@ func (d *DiscoveryService) HandleHeartbeat(ctx context.Context, req *pb.Heartbea
 	defer d.mutex.Unlock()
 	
 	// Create or update the peer
-	peer, exists := d.peers[req.TeeId]
+	peer, exists := d.peers[req.SenderId]
 	if !exists {
 		// Create a new peer
 		peer = &PeerInfo{
-			TEEID:         req.TeeId,
+			TEEID:         req.SenderId,
 			TEEType:       req.TeeType,
 			RegionID:      req.RegionId,
 			Endpoint:      req.Endpoint,
@@ -496,7 +496,7 @@ func (d *DiscoveryService) HandleHeartbeat(ctx context.Context, req *pb.Heartbea
 			Attestation:   req.Attestation,
 			TlsCertificate: req.TlsCertificate,
 		}
-		d.peers[req.TeeId] = peer
+		d.peers[req.SenderId] = peer
 	} else {
 		// Update existing peer
 		peer.LastSeen = time.Now()

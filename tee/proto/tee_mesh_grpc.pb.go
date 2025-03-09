@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	TeeMesh_Discover_FullMethodName      = "/proto.TeeMesh/Discover"
 	TeeMesh_DirectExecute_FullMethodName = "/proto.TeeMesh/DirectExecute"
+	TeeMesh_ProxyExecute_FullMethodName  = "/proto.TeeMesh/ProxyExecute"
 	TeeMesh_Ping_FullMethodName          = "/proto.TeeMesh/Ping"
 	TeeMesh_Sync_FullMethodName          = "/proto.TeeMesh/Sync"
 	TeeMesh_Heartbeat_FullMethodName     = "/proto.TeeMesh/Heartbeat"
@@ -37,6 +38,8 @@ type TeeMeshClient interface {
 	Discover(ctx context.Context, in *DiscoveryRequest, opts ...grpc.CallOption) (*DiscoveryResponse, error)
 	// DirectExecute allows one TEE to directly execute operations on another
 	DirectExecute(ctx context.Context, in *DirectExecutionRequest, opts ...grpc.CallOption) (*DirectExecutionResponse, error)
+	// ProxyExecute allows execution with automatic failover between TEEs
+	ProxyExecute(ctx context.Context, in *ProxyExecutionRequest, opts ...grpc.CallOption) (*DirectExecutionResponse, error)
 	// Ping is a simple health check
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 	// Sync syncs state between TEEs
@@ -69,6 +72,16 @@ func (c *teeMeshClient) DirectExecute(ctx context.Context, in *DirectExecutionRe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DirectExecutionResponse)
 	err := c.cc.Invoke(ctx, TeeMesh_DirectExecute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *teeMeshClient) ProxyExecute(ctx context.Context, in *ProxyExecutionRequest, opts ...grpc.CallOption) (*DirectExecutionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DirectExecutionResponse)
+	err := c.cc.Invoke(ctx, TeeMesh_ProxyExecute_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +138,8 @@ type TeeMeshServer interface {
 	Discover(context.Context, *DiscoveryRequest) (*DiscoveryResponse, error)
 	// DirectExecute allows one TEE to directly execute operations on another
 	DirectExecute(context.Context, *DirectExecutionRequest) (*DirectExecutionResponse, error)
+	// ProxyExecute allows execution with automatic failover between TEEs
+	ProxyExecute(context.Context, *ProxyExecutionRequest) (*DirectExecutionResponse, error)
 	// Ping is a simple health check
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	// Sync syncs state between TEEs
@@ -148,6 +163,9 @@ func (UnimplementedTeeMeshServer) Discover(context.Context, *DiscoveryRequest) (
 }
 func (UnimplementedTeeMeshServer) DirectExecute(context.Context, *DirectExecutionRequest) (*DirectExecutionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DirectExecute not implemented")
+}
+func (UnimplementedTeeMeshServer) ProxyExecute(context.Context, *ProxyExecutionRequest) (*DirectExecutionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProxyExecute not implemented")
 }
 func (UnimplementedTeeMeshServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
@@ -214,6 +232,24 @@ func _TeeMesh_DirectExecute_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TeeMeshServer).DirectExecute(ctx, req.(*DirectExecutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TeeMesh_ProxyExecute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProxyExecutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeMeshServer).ProxyExecute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeMesh_ProxyExecute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeMeshServer).ProxyExecute(ctx, req.(*ProxyExecutionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -304,6 +340,10 @@ var TeeMesh_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DirectExecute",
 			Handler:    _TeeMesh_DirectExecute_Handler,
+		},
+		{
+			MethodName: "ProxyExecute",
+			Handler:    _TeeMesh_ProxyExecute_Handler,
 		},
 		{
 			MethodName: "Ping",
