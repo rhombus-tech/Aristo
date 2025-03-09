@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/rhombus-tech/vm/tee/proto";
+
+// TeeMesh service manages direct communication between TEEs
+service TeeMesh {
+  // Discover allows TEEs to find each other within the same region
+  rpc Discover(DiscoveryRequest) returns (DiscoveryResponse) {}
+  
+  // DirectExecute allows one TEE to directly execute operations on another
+  rpc DirectExecute(DirectExecutionRequest) returns (DirectExecutionResponse) {}
+  
+  // Ping is a simple health check
+  rpc Ping(PingRequest) returns (PingResponse) {}
+  
+  // Sync syncs state between TEEs
+  rpc Sync(SyncRequest) returns (SyncResponse) {}
+}
+
+// DiscoveryRequest contains information about the requesting TEE
+message DiscoveryRequest {
+  string tee_id = 1;        // ID of the requesting TEE
+  string region_id = 2;     // Region ID
+  string tee_type = 3;      // TEE type (SGX or SEV)
+  string endpoint = 4;      // Network endpoint of the TEE
+}
+
+// DiscoveryResponse provides information about available TEEs
+message DiscoveryResponse {
+  repeated TEEPeer peers = 1;  // List of available TEEs in the region
+}
+
+// TEEPeer contains information about a single TEE
+message TEEPeer {
+  string tee_id = 1;        // Unique ID of the TEE
+  string tee_type = 2;      // Type of TEE (SGX or SEV)
+  string endpoint = 3;      // Network endpoint
+  string region_id = 4;     // Region ID
+  string status = 5;        // Status of the TEE (active, degraded, etc.)
+}
+
+// DirectExecutionRequest contains details for direct TEE-to-TEE execution
+message DirectExecutionRequest {
+  string sender_id = 1;     // ID of the requesting TEE
+  string id_to = 2;         // Contract ID or object ID
+  string function_call = 3; // Function to call
+  bytes parameters = 4;     // Function parameters
+  string region_id = 5;     // Region ID
+  bool detailed_proof = 6;  // Whether to include detailed proof
+  bytes expected_hash = 7;  // Expected state hash (optional)
+  bool bypass_coordinator = 8; // Whether to bypass the regional coordinator
+}
+
+// DirectExecutionResponse contains the result of direct execution
+message DirectExecutionResponse {
+  string timestamp = 1;      // Execution timestamp
+  bytes result = 2;          // Execution result
+  bytes state_hash = 3;      // State hash after execution
+  uint64 execution_time = 4; // Execution time in milliseconds
+  uint64 memory_used = 5;    // Memory used during execution
+  uint64 syscall_count = 6;  // Number of syscalls made
+  uint64 network_latency_ns = 7; // Network latency in nanoseconds
+}
+
+// PingRequest is a simple ping message
+message PingRequest {
+  string sender_id = 1;     // ID of the sender
+}
+
+// PingResponse is a simple pong message
+message PingResponse {
+  string responder_id = 1;  // ID of the responder
+  int64 timestamp_ns = 2;   // Timestamp in nanoseconds
+}
+
+// SyncRequest contains state sync information
+message SyncRequest {
+  string sender_id = 1;     // ID of the sender
+  string object_id = 2;     // Object ID to sync
+  bytes state_hash = 3;     // Current state hash
+  int64 timestamp_ns = 4;   // Timestamp in nanoseconds
+}
+
+// SyncResponse contains sync result
+message SyncResponse {
+  bool success = 1;         // Whether sync was successful
+  bytes state_hash = 2;     // New state hash
+  int64 timestamp_ns = 3;   // Timestamp in nanoseconds
+}
