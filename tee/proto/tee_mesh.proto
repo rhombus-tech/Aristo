@@ -99,25 +99,23 @@ message SyncResponse {
 // HeartbeatRequest sends attestation and status info to peers
 message HeartbeatRequest {
   string tee_id = 1;        // ID of the sending TEE
-  string tee_type = 2;      // Type of TEE (SGX or SEV)
+  string tee_type = 2;      // Type of the TEE (SGX or SEV)
   string region_id = 3;     // Region ID
-  string endpoint = 4;      // Network endpoint of the TEE
-  string timestamp = 5;     // Timestamp of this heartbeat
-  
-  // Accumulator attestation data
-  AccumulatorWitness attestation = 6;  // Attestation witness from the accumulator
+  string endpoint = 4;      // Network endpoint
+  string timestamp = 5;     // Current timestamp
+  AccumulatorWitness attestation = 6; // Attestation data
+  bytes tls_certificate = 7; // TLS certificate for secure communication
 }
 
 // HeartbeatResponse confirms receipt of heartbeat
 message HeartbeatResponse {
   string tee_id = 1;        // ID of the responding TEE
-  string tee_type = 2;      // Type of TEE (SGX or SEV)
+  string tee_type = 2;      // Type of the TEE
   string region_id = 3;     // Region ID
-  string endpoint = 4;      // Network endpoint of the responding TEE
-  string timestamp = 5;     // Timestamp of this response
-  
-  // Optional witness for the responding TEE
-  AccumulatorWitness attestation = 6;  // Responder's attestation witness
+  string endpoint = 4;      // Network endpoint
+  string timestamp = 5;     // Response timestamp
+  AccumulatorWitness attestation = 6; // Attestation data
+  bytes tls_certificate = 7; // TLS certificate for secure communication
 }
 
 // GetPeersRequest requests a list of peers in the region
@@ -134,14 +132,13 @@ message GetPeersResponse {
 
 // Peer contains information about an attested TEE peer
 message Peer {
-  string tee_id = 1;       // ID of the peer TEE
-  string tee_type = 2;     // Type of TEE
-  string region_id = 3;    // Region ID
-  string endpoint = 4;     // Network endpoint
-  string status = 5;       // Current status (active, degraded, etc.)
-  
-  // Attestation information from accumulator
-  AccumulatorWitness attestation = 6;  // Attestation witness from the accumulator
+  string tee_id = 1;        // Unique ID of the TEE
+  string tee_type = 2;      // Type of TEE (SGX or SEV)
+  string region_id = 3;     // Region ID
+  string endpoint = 4;      // Network endpoint
+  string status = 5;        // Status of the peer (active, degraded, etc.)
+  AccumulatorWitness attestation = 6; // Attestation witness
+  bytes tls_certificate = 7; // TLS certificate for secure communication
 }
 
 // AccumulatorWitness contains attestation data from the accumulator

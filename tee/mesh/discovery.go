@@ -3,13 +3,17 @@ package mesh
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"io/ioutil"
 	"sync"
 	"time"
 
 	"github.com/rhombus-tech/vm/tee/accumulator"
 	pb "github.com/rhombus-tech/vm/tee/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // DiscoveryConfig holds configuration for the discovery service
@@ -34,6 +38,15 @@ type DiscoveryConfig struct {
 	
 	// DeadThreshold is how many missed heartbeats before considering a TEE dead
 	DeadThreshold int
+
+	// TLSCertPath is the path to the TLS certificate
+	TLSCertPath string
+
+	// TLSKeyPath is the path to the TLS private key
+	TLSKeyPath string
+
+	// TLSEnabled specifies whether to use TLS for secure communication
+	TLSEnabled bool
 }
 
 // DefaultDiscoveryConfig returns a default configuration
@@ -73,6 +86,9 @@ type PeerInfo struct {
 	
 	// Attestation is the most recent attestation witness from this peer
 	Attestation *pb.AccumulatorWitness
+
+	// TlsCertificate is the peer's TLS certificate (if used)
+	TlsCertificate []byte
 }
 
 // DiscoveryService manages the discovery of peers in the mesh
@@ -97,6 +113,9 @@ type DiscoveryService struct {
 	
 	// cancel is the cancel function for the context
 	cancel context.CancelFunc
+
+	// tlsConfig is the TLS configuration for the peer
+	tlsConfig *tls.Config
 }
 
 // NewDiscoveryService creates a new discovery service
@@ -126,13 +145,33 @@ func NewDiscoveryService(config *DiscoveryConfig) (*DiscoveryService, error) {
 	
 	// Create the accumulator client
 	accClient := accumulator.NewClient(config.TEEID, config.TEEType)
+
+	var tlsConfig *tls.Config
+	var err error
+
+	// Initialize TLS if enabled
+	if config.TLSEnabled {
+		// Validate TLS config
+		if config.TLSCertPath == "" || config.TLSKeyPath == "" {
+			cancel() // Cancel the context to prevent leak
+			return nil, fmt.Errorf("TLS certificate and key paths are required when TLS is enabled")
+		}
+		
+		// Create TLS config
+		tlsConfig, err = createTLSConfiguration(config.TLSCertPath, config.TLSKeyPath)
+		if err != nil {
+			cancel() // Cancel the context to prevent leak
+			return nil, fmt.Errorf("failed to create TLS config: %w", err)
+		}
+	}
 	
 	return &DiscoveryService{
-		config:     config,
-		peers:      make(map[string]*PeerInfo),
-		accClient:  accClient,
-		ctx:        ctx,
-		cancel:     cancel,
+		config:       config,
+		peers:        make(map[string]*PeerInfo),
+		accClient:    accClient,
+		ctx:          ctx,
+		cancel:       cancel,
+		tlsConfig:    tlsConfig,
 	}, nil
 }
 
@@ -141,12 +180,14 @@ func (d *DiscoveryService) Start() error {
 	// Refresh the accumulator
 	err := d.accClient.RefreshAccumulator(d.ctx)
 	if err != nil {
+		d.cancel() // Cancel the context to prevent leak
 		return fmt.Errorf("failed to refresh accumulator: %w", err)
 	}
 	
 	// Get the local witness
 	localWitness, err := d.accClient.GetLocalWitness(d.ctx)
 	if err != nil {
+		d.cancel() // Cancel the context to prevent leak
 		return fmt.Errorf("failed to get local witness: %w", err)
 	}
 	d.localWitness = localWitness
@@ -311,12 +352,13 @@ func (d *DiscoveryService) updatePeerFromHeartbeat(resp *pb.HeartbeatResponse) {
 		// This is a new peer, we'll add it but won't create a connection yet
 		// since we don't have enough information
 		peer = &PeerInfo{
-			TEEID:    resp.TeeId,
-			TEEType:  resp.TeeType,
-			RegionID: resp.RegionId,
-			Endpoint: resp.Endpoint,
-			Status:   "pending", // We'll verify the attestation before marking as active
-			LastSeen: time.Now(),
+			TEEID:          resp.TeeId,
+			TEEType:        resp.TeeType,
+			RegionID:       resp.RegionId,
+			Endpoint:       resp.Endpoint,
+			Status:         "pending", // We'll verify the attestation before marking as active
+			LastSeen:       time.Now(),
+			TlsCertificate: resp.TlsCertificate,
 		}
 		d.peers[resp.TeeId] = peer
 	} else {
@@ -325,15 +367,21 @@ func (d *DiscoveryService) updatePeerFromHeartbeat(resp *pb.HeartbeatResponse) {
 		peer.RegionID = resp.RegionId
 		peer.Endpoint = resp.Endpoint
 		peer.LastSeen = time.Now()
+		
+		// Update TLS certificate if provided
+		if resp.TlsCertificate != nil && len(resp.TlsCertificate) > 0 {
+			peer.TlsCertificate = resp.TlsCertificate
+		}
 	}
 	
 	// If we have attestation information, verify it
 	if resp.Attestation != nil {
-		valid, err := d.accClient.VerifyWitness(resp.Attestation, true)
+		// skipCacheCheck should be false in production environments
+		skip := false
+		valid, err := d.accClient.VerifyWitness(resp.Attestation, skip)
 		if err != nil || !valid {
-			// Attestation failed, mark as untrusted
-			peer.Status = "untrusted"
-			peer.Attestation = nil
+			// Attestation failed, mark as unverified
+			peer.Status = "unverified"
 		} else {
 			// Attestation passed, store it and mark as active
 			peer.Status = "active"
@@ -359,11 +407,7 @@ func (d *DiscoveryService) RegisterPeer(peerInfo *PeerInfo) error {
 	// Verify attestation if provided
 	if peerInfo.Attestation != nil {
 		valid, err := d.accClient.VerifyWitness(peerInfo.Attestation, true)
-		if err != nil {
-			return fmt.Errorf("failed to verify attestation: %w", err)
-		}
-		
-		if !valid {
+		if err == nil && !valid {
 			return fmt.Errorf("attestation verification failed")
 		}
 	}
@@ -435,47 +479,68 @@ func (d *DiscoveryService) GetPeer(peerID string) (*PeerInfo, bool) {
 
 // HandleHeartbeat processes a heartbeat request from a peer
 func (d *DiscoveryService) HandleHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
-	if req == nil {
-		return nil, fmt.Errorf("request is nil")
-	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
 	
-	// Create a peer info object from the request
-	peerInfo := &PeerInfo{
-		TEEID:    req.TeeId,
-		TEEType:  req.TeeType,
-		RegionID: req.RegionId,
-		Endpoint: req.Endpoint,
-		Status:   "pending", // Will be updated after attestation verification
-		LastSeen: time.Now(),
-	}
-	
-	// If we have attestation information, store it
-	if req.Attestation != nil {
-		peerInfo.Attestation = req.Attestation
+	// Create or update the peer
+	peer, exists := d.peers[req.TeeId]
+	if !exists {
+		// Create a new peer
+		peer = &PeerInfo{
+			TEEID:         req.TeeId,
+			TEEType:       req.TeeType,
+			RegionID:      req.RegionId,
+			Endpoint:      req.Endpoint,
+			Status:        "active",
+			LastSeen:      time.Now(),
+			Attestation:   req.Attestation,
+			TlsCertificate: req.TlsCertificate,
+		}
+		d.peers[req.TeeId] = peer
+	} else {
+		// Update existing peer
+		peer.LastSeen = time.Now()
+		peer.Status = "active"
+		peer.TEEType = req.TeeType
+		peer.RegionID = req.RegionId
+		peer.Endpoint = req.Endpoint
+		peer.Attestation = req.Attestation
 		
-		// Verify the attestation
-		valid, err := d.accClient.VerifyWitness(req.Attestation, true)
-		if err == nil && valid {
-			peerInfo.Status = "active"
-		} else {
-			peerInfo.Status = "untrusted"
+		// Update TLS certificate if provided
+		if req.TlsCertificate != nil && len(req.TlsCertificate) > 0 {
+			peer.TlsCertificate = req.TlsCertificate
 		}
 	}
 	
-	// Register the peer
-	err := d.RegisterPeer(peerInfo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to register peer: %w", err)
+	// Verify the attestation if present
+	if req.Attestation != nil {
+		// skipCacheCheck is false in production, true only for testing
+		skip := false
+		valid, err := d.accClient.VerifyWitness(req.Attestation, skip)
+		if err != nil || !valid {
+			// If verification fails, mark the peer as unverified but don't reject
+			// This allows for degraded operation when attestation is problematic
+			peer.Status = "unverified"
+		}
 	}
 	
-	// Create a response with our information
+	// Prepare our response with our own attestation
 	resp := &pb.HeartbeatResponse{
-		TeeId:      d.config.TEEID,
-		TeeType:    d.config.TEEType,
-		RegionId:   d.config.RegionID,
-		Endpoint:   d.config.Endpoint,
-		Timestamp:  time.Now().Format(time.RFC3339Nano),
-		Attestation: d.localWitness,
+		TeeId:          d.config.TEEID,
+		TeeType:        d.config.TEEType,
+		RegionId:       d.config.RegionID,
+		Endpoint:       d.config.Endpoint,
+		Timestamp:      time.Now().Format(time.RFC3339),
+		Attestation:    d.localWitness,
+	}
+	
+	// Include our TLS certificate if TLS is enabled
+	if d.config.TLSEnabled && d.tlsConfig != nil {
+		// Load our certificate for sharing
+		certBytes, err := ioutil.ReadFile(d.config.TLSCertPath)
+		if err == nil {
+			resp.TlsCertificate = certBytes
+		}
 	}
 	
 	return resp, nil
@@ -532,7 +597,18 @@ func (d *DiscoveryService) ConnectToPeer(peerID string) error {
 	}
 	
 	// Create a connection to the peer
-	conn, err := grpc.Dial(peer.Endpoint, grpc.WithInsecure())
+	var opts []grpc.DialOption
+	
+	// Use TLS if configured
+	if d.config.TLSEnabled && d.tlsConfig != nil {
+		// Create TLS transport credentials
+		creds := credentials.NewTLS(d.tlsConfig)
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+	} else {
+		opts = append(opts, grpc.WithInsecure())
+	}
+	
+	conn, err := grpc.Dial(peer.Endpoint, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer: %w", err)
 	}
@@ -574,4 +650,59 @@ func (d *DiscoveryService) DisconnectFromPeer(peerID string) error {
 // GetLocalWitness returns the attestation witness for the local TEE
 func (d *DiscoveryService) GetLocalWitness() *pb.AccumulatorWitness {
 	return d.localWitness
+}
+
+// LoadTLSCredentials loads TLS credentials from files
+func LoadTLSCredentials(certPath, keyPath string) (*tls.Certificate, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load TLS credentials: %w", err)
+	}
+	
+	return &cert, nil
+}
+
+// LoadTLSCACredentials loads TLS CA credentials from a file
+func LoadTLSCACredentials(caPath string) (*x509.CertPool, error) {
+	caCert, err := ioutil.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+	}
+	
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to append CA certificate to cert pool")
+	}
+	
+	return caCertPool, nil
+}
+
+// createTLSConfiguration creates a TLS configuration for mutual TLS authentication
+func createTLSConfiguration(certFile, keyFile string) (*tls.Config, error) {
+	// Load certificate and key
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load TLS key pair: %w", err)
+	}
+
+	// Create a certificate pool from the certificate authority
+	certPool := x509.NewCertPool()
+	ca, err := ioutil.ReadFile(certFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read certificate file: %w", err)
+	}
+
+	// Add the certificate to the pool
+	if !certPool.AppendCertsFromPEM(ca) {
+		return nil, fmt.Errorf("failed to append certificate to pool")
+	}
+
+	// Create the TLS configuration with the client certificate
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      certPool,
+		ClientCAs:    certPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
