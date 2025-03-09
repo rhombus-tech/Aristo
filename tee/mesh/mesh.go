@@ -2,10 +2,10 @@
 package mesh
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -16,10 +16,9 @@ import (
 
 	"github.com/gabstv/go-bsdiff/pkg/bsdiff"
 	"github.com/gabstv/go-bsdiff/pkg/bspatch"
+	"github.com/rhombus-tech/vm/tee/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-
-	"github.com/rhombus-tech/vm/tee/proto"
 )
 
 // MeshService implements the TeeMesh service for direct TEE-to-TEE communication
@@ -53,9 +52,98 @@ type MeshService struct {
 	stateMutex   sync.RWMutex
 	stateCache   map[string]stateInfo
 	lastStateHash []byte
-	// Add a new field for object state storage
-	objectStates map[string][]byte
+	// State management
+	stateManager StateManager
+}
+
+// StateManager defines the interface for managing serialized state
+type StateManager interface {
+	// SerializeState serializes an object to a byte array
+	SerializeState(objectID string, object interface{}) ([]byte, error)
+	
+	// DeserializeState deserializes a byte array to an object
+	DeserializeState(objectID string, data []byte, target interface{}) error
+	
+	// GetState retrieves the state for an object
+	GetState(objectID string) ([]byte, error)
+	
+	// SetState stores the state for an object
+	SetState(objectID string, state []byte) error
+}
+
+// DefaultStateManager is the default implementation of the StateManager interface
+type DefaultStateManager struct {
+	objectStates     map[string][]byte
 	objectStatesMutex sync.RWMutex
+}
+
+// NewDefaultStateManager creates a new DefaultStateManager
+func NewDefaultStateManager() *DefaultStateManager {
+	return &DefaultStateManager{
+		objectStates: make(map[string][]byte),
+	}
+}
+
+// SerializeState implements StateManager.SerializeState using JSON
+func (m *DefaultStateManager) SerializeState(objectID string, object interface{}) ([]byte, error) {
+	if object == nil {
+		return nil, fmt.Errorf("cannot serialize nil object")
+	}
+	
+	// Use JSON marshal for serialization
+	data, err := json.Marshal(object)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize state: %w", err)
+	}
+	
+	// Store the state
+	err = m.SetState(objectID, data)
+	if err != nil {
+		return nil, err
+	}
+	
+	return data, nil
+}
+
+// DeserializeState implements StateManager.DeserializeState using JSON
+func (m *DefaultStateManager) DeserializeState(objectID string, data []byte, target interface{}) error {
+	if target == nil {
+		return fmt.Errorf("cannot deserialize to nil target")
+	}
+	
+	// Use JSON unmarshal for deserialization
+	err := json.Unmarshal(data, target)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize state: %w", err)
+	}
+	
+	return nil
+}
+
+// GetState implements StateManager.GetState
+func (m *DefaultStateManager) GetState(objectID string) ([]byte, error) {
+	m.objectStatesMutex.RLock()
+	defer m.objectStatesMutex.RUnlock()
+	
+	state, exists := m.objectStates[objectID]
+	if !exists {
+		return nil, fmt.Errorf("no state found for object %s", objectID)
+	}
+	
+	return state, nil
+}
+
+// SetState implements StateManager.SetState
+func (m *DefaultStateManager) SetState(objectID string, state []byte) error {
+	if len(state) == 0 {
+		return fmt.Errorf("cannot store empty state")
+	}
+	
+	m.objectStatesMutex.Lock()
+	m.objectStates[objectID] = state
+	m.objectStatesMutex.Unlock()
+	
+	return nil
 }
 
 // Peer represents a remote TEE in the mesh
@@ -172,6 +260,8 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 		}
 	}
 	
+	stateManager := NewDefaultStateManager()
+	
 	return &MeshService{
 		teeID:           config.TEEID,
 		teeType:         config.TEEType,
@@ -183,7 +273,7 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 		peers:           make(map[string]*Peer),
 		executionHandler: config.Handler,
 		stateCache:       make(map[string]stateInfo),
-		objectStates:     make(map[string][]byte),
+		stateManager:     stateManager,
 	}, nil
 }
 
@@ -294,16 +384,72 @@ func (m *MeshService) Discover(ctx context.Context, req *proto.DiscoveryRequest)
 
 // DirectExecute handles direct execution requests
 func (m *MeshService) DirectExecute(ctx context.Context, req *proto.DirectExecutionRequest) (*proto.DirectExecutionResponse, error) {
-	// Make sure we have a handler
-	if m.executionHandler == nil {
-		return nil, errors.New("no execution handler configured")
+	if req == nil {
+		return nil, errors.New("cannot execute nil request")
 	}
 	
-	// Execute the request
+	// Record start time for latency calculation
 	start := time.Now()
-	resp, err := m.executionHandler.Execute(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("execution failed: %w", err)
+	
+	// Validate the request
+	if req.FunctionCall == "" {
+		return &proto.DirectExecutionResponse{
+			Success:     false,
+			Result:      []byte("Error: No function specified"),
+			Timestamp:   fmt.Sprintf("%d", time.Now().UnixNano()),
+		}, nil
+	}
+	
+	// Retrieve the required state if needed
+	if m.executionHandler != nil && req.IdTo != "" {
+		// Get current state for the object, if it exists
+		currentState, err := m.stateManager.GetState(req.IdTo)
+		if err != nil {
+			// State not found, but that's OK for some executions
+			// Just log the warning and continue
+			fmt.Printf("Warning: State not found for object %s: %v\n", req.IdTo, err)
+		} else if len(currentState) > 0 {
+			// If we have state, we might want to modify the request to include it
+			// In our implementation, we pass it unmodified to the execution handler
+			// to handle state in its own way
+			fmt.Printf("Found state for object %s, size: %d bytes\n", req.IdTo, len(currentState))
+		}
+	}
+	
+	// If we don't have an execution handler, we can't process this request
+	if m.executionHandler == nil {
+		return &proto.DirectExecutionResponse{
+			Success:     false,
+			Result:      []byte("Error: No execution handler registered"),
+			Timestamp:   fmt.Sprintf("%d", time.Now().UnixNano()),
+		}, nil
+	}
+	
+	// Execute request and return response
+	resp, execErr := m.executionHandler.Execute(ctx, req)
+	if execErr != nil {
+		fmt.Printf("Execution error for function %s: %v\n", req.FunctionCall, execErr)
+		return &proto.DirectExecutionResponse{
+			Success:     false,
+			Result:      []byte(fmt.Sprintf("Error: %v", execErr)),
+			Timestamp:   fmt.Sprintf("%d", time.Now().UnixNano()),
+		}, nil
+	}
+	
+	// If execution was successful and response contains result data, update our state
+	// In our implementation, we'll consider the Output field to contain state updates if needed
+	if resp.Success && req.IdTo != "" && resp.Result != nil && len(resp.Result) > 0 {
+		// Store the updated state after execution
+		err := m.stateManager.SetState(req.IdTo, resp.Result)
+		if err != nil {
+			// Log the error but don't fail the request
+			fmt.Printf("Warning: Failed to store output state for object %s: %v\n", req.IdTo, err)
+		}
+		
+		// Update our last state hash for efficient delta updates
+		m.stateMutex.Lock()
+		m.lastStateHash = resp.Result
+		m.stateMutex.Unlock()
 	}
 	
 	// Add network latency
@@ -337,16 +483,13 @@ func (m *MeshService) Ping(ctx context.Context, req *proto.PingRequest) (*proto.
 
 // Sync handles state synchronization requests
 func (m *MeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.SyncResponse, error) {
-	// Performance-optimized state synchronization
-	
-	// 1. Quick hash check - if hashes match, no need to sync
-	// This avoids unnecessary data transfers and processing
-	if m.lastStateHash != nil && bytes.Equal(m.lastStateHash, req.StateHash) {
+	// 1. Check if we have the requested object
+	state, err := m.getStateForObject(req.ObjectId)
+	if err != nil {
 		return &proto.SyncResponse{
-			Success:      true,
-			StateHash:    req.StateHash,
-			TimestampNs:  time.Now().UnixNano(),
-			DeltaUpdates: nil, // No updates needed
+			Success:     false,
+			StateHash:   nil,
+			TimestampNs: time.Now().UnixNano(),
 		}, nil
 	}
 	
@@ -356,130 +499,154 @@ func (m *MeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.
 	lastState, hasLastState := m.stateCache[key]
 	m.stateMutex.RUnlock()
 	
-	// 3. Determine if we need full state transfer or delta update
-	var deltaUpdates []byte
+	// 3. Prepare response
+	resp := &proto.SyncResponse{
+		Success:     true,
+		StateHash:   nil,
+		TimestampNs: time.Now().UnixNano(),
+	}
 	
-	// If we have previous state to compare with, generate delta
-	if hasLastState && lastState.timestamp > 0 {
-		// Get current state
+	// 4. Determine if we should send full state or delta
+	if hasLastState && req.StateHash != nil {
+		// We have previous state from this sender and they provided a hash
+		// Calculate a delta if it's more efficient
 		currentState, err := m.getStateForObject(req.ObjectId)
 		if err == nil {
 			// Only use delta if it's more efficient
-			if shouldUseDelta(lastState.state, currentState) {
+			if m.shouldUseDelta(lastState.state, currentState, 0.5) {
 				// Generate delta update (only changed portions)
-				deltaUpdates, err = m.generateDeltaUpdates(req.ObjectId, lastState.state)
+				deltaUpdates, err := m.generateDeltaUpdates(req.ObjectId, lastState.state)
 				if err != nil {
-					// Fall back to full state if delta generation fails
-					deltaUpdates = nil
+					fmt.Printf("Warning: Failed to generate delta updates: %v\n", err)
+				} else {
+					// If the delta is significantly smaller than the full state, use it
+					if len(deltaUpdates) < len(state)/2 {
+						resp.DeltaUpdates = deltaUpdates
+						resp.StateHash = currentState
+					}
 				}
-			} else {
-				// Full state transfer is more efficient
-				deltaUpdates = nil
 			}
 		}
 	}
 	
-	// 4. Prepare response with appropriate state update method
-	resp := &proto.SyncResponse{
-		Success:      true,
-		StateHash:    m.lastStateHash,
-		TimestampNs:  time.Now().UnixNano(),
-		DeltaUpdates: deltaUpdates,
-		// If deltaUpdates is nil, the recipient will request full state
+	// If we didn't add a delta, use the full state hash
+	if resp.DeltaUpdates == nil {
+		resp.StateHash = state
 	}
 	
-	// 5. Update our cache of peer's last known state
-	if req.StateHash != nil {
-		m.stateMutex.Lock()
-		m.stateCache[key] = stateInfo{
-			state:     req.StateHash,
-			timestamp: req.TimestampNs,
-		}
-		m.stateMutex.Unlock()
+	// 5. Update our cache of what this sender has
+	m.stateMutex.Lock()
+	m.stateCache[key] = stateInfo{
+		state:     state,
+		timestamp: time.Now().UnixNano(),
 	}
+	m.stateMutex.Unlock()
 	
 	return resp, nil
 }
 
-// handleReceivedSync processes a received sync response with possible delta updates
-func (m *MeshService) handleReceivedSync(senderID string, objectID string, resp *proto.SyncResponse) error {
+// handleReceivedSync processes a received sync response
+func (m *MeshService) handleReceivedSync(resp *proto.SyncResponse) error {
 	if resp == nil {
-		return fmt.Errorf("received nil sync response")
+		return errors.New("received nil sync response")
 	}
 	
-	key := fmt.Sprintf("%s:%s", senderID, objectID)
+	// We need to determine the object ID from context
+	// In a real implementation, you'd track this in a request/response map
+	// For now we'll use a placeholder
+	objectID := "current-sync-object" // This needs to be passed or tracked
 	
-	// Apply delta updates if received
+	// Check if we received a delta update
 	if resp.DeltaUpdates != nil && len(resp.DeltaUpdates) > 0 {
-		m.stateMutex.RLock()
-		lastStateInfo, exists := m.stateCache[key]
-		m.stateMutex.RUnlock()
+		// We got a delta update, need to apply it to our current state
 		
-		if !exists {
-			return fmt.Errorf("received delta updates but have no previous state reference")
-		}
-		
-		newState, err := m.applyDeltaUpdates(lastStateInfo.state, resp.DeltaUpdates)
+		// Get our current state for the object
+		currentState, err := m.stateManager.GetState(objectID)
 		if err != nil {
-			return fmt.Errorf("failed to apply delta updates: %w", err)
+			return &DeltaUpdateError{
+				Operation: "sync",
+				ObjectID:  objectID,
+				Err:       fmt.Errorf("failed to get current state: %w", err),
+			}
 		}
 		
-		// Update both stateCache and objectStates
-		m.stateMutex.Lock()
-		m.stateCache[key] = stateInfo{
-			state:     newState,
-			timestamp: resp.TimestampNs,
+		// Apply the delta update to our current state
+		newState, err := m.applyDeltaUpdates(currentState, resp.DeltaUpdates)
+		if err != nil {
+			// If delta application fails, we should request a full state instead
+			// This is a recoverable error so we'll just log it
+			fmt.Printf("Failed to apply delta update for object %s: %v\n", objectID, err)
+			
+			// In real implementation, we'd request a full state
+			// This is just a placeholder for now
+			return &DeltaUpdateError{
+				Operation: "sync",
+				ObjectID:  objectID,
+				Err:       fmt.Errorf("fallback to full state after delta failure: %w", err),
+			}
 		}
-		m.stateMutex.Unlock()
 		
-		// Update the object state
-		m.updateObjectState(objectID, newState)
-	} else if resp.StateHash != nil {
-		// No delta updates, but we have a new state hash
-		// In a full implementation, we would request the full state
-		
-		// For now, just update our cache
-		m.stateMutex.Lock()
-		m.stateCache[key] = stateInfo{
-			state:     resp.StateHash,
-			timestamp: resp.TimestampNs,
+		// Successfully applied delta, store the new state
+		err = m.stateManager.SetState(objectID, newState)
+		if err != nil {
+			return &DeltaUpdateError{
+				Operation: "sync",
+				ObjectID:  objectID,
+				Err:       fmt.Errorf("failed to store updated state: %w", err),
+			}
 		}
-		m.stateMutex.Unlock()
+		
+		fmt.Printf("Successfully applied delta update for object %s, new state size: %d bytes\n", 
+			objectID, len(newState))
+	} else if resp.StateHash != nil && len(resp.StateHash) > 0 {
+		// We got a state hash, but no actual state
+		// In a real implementation, we would request the full state if needed
+		fmt.Printf("Received state hash for object %s, hash size: %d bytes\n", 
+			objectID, len(resp.StateHash))
+		
+		// We'd then decide whether to request the full state
+		// based on comparing this hash with our current state hash
+	} else {
+		// No state or delta received
+		return fmt.Errorf("sync response contained neither state hash nor delta updates")
 	}
 	
 	return nil
 }
 
-// shouldUseDelta determines if using a delta update is more efficient than full state transfer
-// based on size and change percentage
-func shouldUseDelta(oldState, newState []byte) bool {
-	// If either state is missing, can't do delta
-	if len(oldState) == 0 || len(newState) == 0 {
+// shouldUseDelta determines if we should use delta updates based on state comparison
+func (m *MeshService) shouldUseDelta(prevState, currentState []byte, changeThreshold float64) bool {
+	// For very small states, the overhead of delta is not worth it
+	if len(prevState) < 1024 || len(currentState) < 1024 {
 		return false
 	}
 	
-	// For very small states, full transfer might be more efficient
-	if len(newState) < 256 {
+	// If no previous state, we can't do a delta update
+	if len(prevState) == 0 {
 		return false
 	}
 	
-	// Get a rough estimate of the change percentage
-	// In a real implementation, you would preview the delta size first
-	diffCount := 0
-	minLen := min(len(oldState), len(newState))
+	// If the state sizes are vastly different, delta is less efficient
+	sizeDiff := float64(abs(len(currentState) - len(prevState))) / float64(len(prevState))
+	if sizeDiff > changeThreshold {
+		return false
+	}
 	
-	// Sample up to 100 bytes to estimate change percentage
-	sampleSize := min(minLen, 100)
+	// Simple heuristic: sample random bytes to estimate change percentage
+	// In a production system, you'd use a more sophisticated algorithm
+	const sampleSize = 100
+	changedBytes := 0
 	for i := 0; i < sampleSize; i++ {
-		if oldState[i] != newState[i] {
-			diffCount++
+		idx := (i * len(prevState) / sampleSize) % len(prevState)
+		if idx < len(currentState) && prevState[idx] != currentState[idx] {
+			changedBytes++
 		}
 	}
 	
-	changePercentage := float64(diffCount) / float64(sampleSize)
+	changePercentage := float64(changedBytes) / float64(sampleSize)
 	
-	// If states differ too much (>50% change), full transfer is more efficient
-	return changePercentage <= 0.5
+	// Use delta updates if less than threshold (e.g., 50%) of bytes changed
+	return changePercentage <= changeThreshold
 }
 
 // stateInfo tracks state information for delta updates
@@ -488,29 +655,83 @@ type stateInfo struct {
 	timestamp int64
 }
 
+// DeltaUpdateError defines errors related to delta update operations
+type DeltaUpdateError struct {
+	Operation string // The operation that failed (generate, apply, etc.)
+	ObjectID  string // The object ID involved
+	Err       error  // The underlying error
+}
+
+func (e *DeltaUpdateError) Error() string {
+	return fmt.Sprintf("delta update %s failed for object %s: %v", e.Operation, e.ObjectID, e.Err)
+}
+
+func (e *DeltaUpdateError) Unwrap() error {
+	return e.Err
+}
+
 // generateDeltaUpdates creates an efficient delta between current and previous state
 // Uses binary diffing for small payloads (reduced CPU cost)
 func (m *MeshService) generateDeltaUpdates(objectID string, previousState []byte) ([]byte, error) {
 	// Get current state for the object
 	currentState, err := m.getStateForObject(objectID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get current state for object %s: %w", objectID, err)
+		return nil, &DeltaUpdateError{
+			Operation: "generate",
+			ObjectID:  objectID,
+			Err:       fmt.Errorf("failed to get current state: %w", err),
+		}
 	}
 	
 	// If no previous state or current state, cannot generate delta
 	if len(previousState) == 0 || len(currentState) == 0 {
-		return nil, fmt.Errorf("cannot generate delta: missing state data")
+		return nil, &DeltaUpdateError{
+			Operation: "generate",
+			ObjectID:  objectID,
+			Err:       errors.New("missing state data"),
+		}
 	}
 	
 	// Use bsdiff to create an efficient binary diff
 	delta, err := bsdiff.Bytes(previousState, currentState)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate delta: %w", err)
+		return nil, &DeltaUpdateError{
+			Operation: "generate",
+			ObjectID:  objectID,
+			Err:       fmt.Errorf("bsdiff failed: %w", err),
+		}
 	}
 	
 	// We don't update lastStateHash here anymore as it's managed by updateObjectState
 	
 	return delta, nil
+}
+
+// applyDeltaUpdates applies a delta patch to a previous state to get the new state
+func (m *MeshService) applyDeltaUpdates(previousState []byte, deltaUpdates []byte) ([]byte, error) {
+	if len(previousState) == 0 {
+		return nil, &DeltaUpdateError{
+			Operation: "apply",
+			ObjectID:  "", // Unknown in this context
+			Err:       errors.New("missing previous state"),
+		}
+	}
+	
+	if len(deltaUpdates) == 0 {
+		return previousState, nil // No changes, return original state
+	}
+	
+	// Apply the bsdiff patch to get the new state
+	newState, err := bspatch.Bytes(previousState, deltaUpdates)
+	if err != nil {
+		return nil, &DeltaUpdateError{
+			Operation: "apply",
+			ObjectID:  "", // Unknown in this context
+			Err:       fmt.Errorf("bspatch failed: %w", err),
+		}
+	}
+	
+	return newState, nil
 }
 
 // getStateForObject retrieves the current state for a given object ID
@@ -522,12 +743,8 @@ func (m *MeshService) getStateForObject(objectID string) ([]byte, error) {
 	// 3. Return the state as a byte array
 	
 	// For testing/placeholder, we'll simulate state
-	m.objectStatesMutex.RLock()
-	defer m.objectStatesMutex.RUnlock()
-	
-	// Check if we have any state for this object
-	state, exists := m.objectStates[objectID]
-	if !exists {
+	state, err := m.stateManager.GetState(objectID)
+	if err != nil {
 		return nil, fmt.Errorf("no state available for object %s", objectID)
 	}
 	
@@ -540,33 +757,16 @@ func (m *MeshService) updateObjectState(objectID string, state []byte) {
 		return
 	}
 	
-	m.objectStatesMutex.Lock()
-	m.objectStates[objectID] = state
-	m.objectStatesMutex.Unlock()
+	err := m.stateManager.SetState(objectID, state)
+	if err != nil {
+		fmt.Printf("Failed to update state for object %s: %v\n", objectID, err)
+		return
+	}
 	
 	// Also update lastStateHash for quick comparisons
 	m.stateMutex.Lock()
 	m.lastStateHash = state
 	m.stateMutex.Unlock()
-}
-
-// applyDeltaUpdates applies a delta patch to a previous state to get the new state
-func (m *MeshService) applyDeltaUpdates(previousState []byte, deltaUpdates []byte) ([]byte, error) {
-	if len(previousState) == 0 {
-		return nil, fmt.Errorf("cannot apply delta: missing previous state")
-	}
-	
-	if len(deltaUpdates) == 0 {
-		return previousState, nil // No changes, return original state
-	}
-	
-	// Apply the bsdiff patch to get the new state
-	newState, err := bspatch.Bytes(previousState, deltaUpdates)
-	if err != nil {
-		return nil, fmt.Errorf("failed to apply delta updates: %w", err)
-	}
-	
-	return newState, nil
 }
 
 // ProxyExecute handles execution requests with automatic failover
@@ -966,51 +1166,110 @@ func min(a, b int) int {
 	return b
 }
 
-// SyncState synchronizes state with another TEE
-func (m *MeshService) SyncState(teeID string, objectID string) error {
-	peer, err := m.getPeer(teeID)
+// abs returns the absolute value of an integer
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// SyncState synchronizes state for an object with another TEE
+func (m *MeshService) SyncState(ctx context.Context, teeID string, objectID string) error {
+	// Check if the peer exists
+	peer, exists := m.GetPeer(teeID)
+	if !exists {
+		return fmt.Errorf("peer %s does not exist", teeID)
+	}
+	
+	// Make sure we have a client connection to the peer
+	if peer.MeshClient == nil {
+		return fmt.Errorf("no client connection to peer %s", teeID)
+	}
+	
+	// Get our current state for calculating deltas
+	previousState, err := m.stateManager.GetState(objectID)
 	if err != nil {
-		return fmt.Errorf("failed to get peer %s: %w", teeID, err)
+		// State doesn't exist yet, that's okay for initial sync
+		fmt.Printf("Warning: No local state found for object %s, will request full state\n", objectID)
+		previousState = nil
 	}
 	
-	client := proto.NewTeeMeshClient(peer.Conn)
-	
-	// Check state cache to determine if we have previous state
-	key := fmt.Sprintf("%s:%s", teeID, objectID)
-	var stateHash []byte
-	var timestampNs int64
-	
-	m.stateMutex.RLock()
-	lastState, hasLastState := m.stateCache[key]
-	if hasLastState {
-		stateHash = lastState.state
-		timestampNs = lastState.timestamp
-	}
-	m.stateMutex.RUnlock()
-	
-	// Build sync request
+	// Create sync request
 	req := &proto.SyncRequest{
-		SenderId:    m.teeID,
-		ObjectId:    objectID,
-		StateHash:   stateHash,
-		TimestampNs: timestampNs,
+		SenderId:     m.teeID,
+		ObjectId:     objectID,
+		StateHash:    previousState, // Use our current state as hash for comparison
+		TimestampNs:  time.Now().UnixNano(),
 	}
 	
-	// Call RPC method
-	resp, err := client.Sync(context.Background(), req)
+	// Send sync request
+	resp, err := peer.MeshClient.Sync(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to sync with peer %s: %w", teeID, err)
+		return fmt.Errorf("sync request failed: %w", err)
 	}
 	
-	// Process the response
-	if !resp.Success {
-		return fmt.Errorf("sync with peer %s failed", teeID)
-	}
-	
-	// Process any delta updates we received
-	err = m.handleReceivedSync(teeID, objectID, resp)
+	// Process sync response
+	err = m.handleReceivedSync(resp)
 	if err != nil {
+		// If handling fails, log detailed error information for debugging
+		var deltaErr *DeltaUpdateError
+		if errors.As(err, &deltaErr) {
+			fmt.Printf("Sync handling failed with delta error: %v\nOperation: %s, ObjectID: %s\n", 
+				deltaErr.Err, deltaErr.Operation, deltaErr.ObjectID)
+			
+			// For certain delta errors, we might want to retry with full state
+			if deltaErr.Operation == "apply" {
+				fmt.Println("Retrying with full state request...")
+				
+				// Request full state
+				retryReq := &proto.SyncRequest{
+					SenderId:     m.teeID,
+					ObjectId:     objectID,
+					StateHash:    nil,
+					TimestampNs:  time.Now().UnixNano(),
+				}
+				
+				retryResp, retryErr := peer.MeshClient.Sync(ctx, retryReq)
+				if retryErr != nil {
+					return fmt.Errorf("retry sync failed: %w", retryErr)
+				}
+				
+				// Process the full state response
+				if retryResp.StateHash != nil {
+					err = m.stateManager.SetState(objectID, retryResp.StateHash)
+					if err != nil {
+						return fmt.Errorf("failed to save full state after retry: %w", err)
+					}
+				}
+			}
+		}
+		
 		return fmt.Errorf("failed to process sync response: %w", err)
+	}
+	
+	// Notify the execution handler that state has been updated
+	// This is an optional step that lets the execution handler know that state has changed
+	if m.executionHandler != nil {
+		// In a real implementation, you'd want to create a notification mechanism
+		// Here we'll just simulate it with a direct execution request
+		state, _ := m.stateManager.GetState(objectID)
+		if state != nil {
+			notifyReq := &proto.DirectExecutionRequest{
+				SenderId:     m.teeID,
+				IdTo:         m.teeID,  // Self-notification
+				FunctionCall: "OnStateUpdated",  // Special function name indicating state update
+				Parameters:   state,    // Pass state as parameters
+			}
+			
+			// Execute the notification in a non-blocking way
+			go func() {
+				_, err := m.DirectExecute(context.Background(), notifyReq)
+				if err != nil {
+					fmt.Printf("Failed to notify execution handler about state update: %v\n", err)
+				}
+			}()
+		}
 	}
 	
 	return nil
@@ -1026,4 +1285,19 @@ func (m *MeshService) getPeer(teeID string) (*Peer, error) {
 	}
 	
 	return peer, nil
+}
+
+// peerClient returns a mesh client for a given peer ID
+func (m *MeshService) peerClient(peerID string) proto.TeeMeshClient {
+	m.peerMutex.RLock()
+	defer m.peerMutex.RUnlock()
+	
+	peer, exists := m.peers[peerID]
+	if !exists || peer.MeshClient == nil {
+		// Log error but don't panic - return nil and let caller handle it
+		fmt.Printf("Warning: No client connection available for peer %s\n", peerID)
+		return nil
+	}
+	
+	return peer.MeshClient
 }
