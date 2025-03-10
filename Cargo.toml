@@ -42,3 +42,6 @@ wasmtime = { version = "25.0.3", features = ["async", "cranelift"] }
 bindgen = "0.69.4"
 serde_json = "1.0"
 simulator = { path = "hyper/x/contracts/simulator" }
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive"] }
+prost = "0.12"
