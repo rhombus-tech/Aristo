@@ -1,0 +1,37 @@
+{
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.extraArgs": ["--no-deps", "--package", "tee-controller"],
+    "rust-analyzer.cargo.buildScripts.enable": false,
+    "rust-analyzer.procMacro.enable": false,
+    "rust-analyzer.diagnostics.disabled": [
+        "unresolved-proc-macro",
+        "unresolved-import",
+        "unresolved-macro-call",
+        "macro-error"
+    ],
+    "rust-analyzer.cargo.features": [],
+    "rust-analyzer.server.extraEnv": {
+        "RUSTFLAGS": ""
+    },
+    "rust-analyzer.workspace.symbol.search.scope": "workspace_and_dependencies",
+    "rust-analyzer.cargo.allFeatures": false,
+    "rust-analyzer.lens.implementations.enable": false,
+    "rust-analyzer.lens.references.adt.enable": false,
+    "rust-analyzer.lens.references.enumVariant.enable": false,
+    "rust-analyzer.lens.references.method.enable": false,
+    "rust-analyzer.lens.references.trait.enable": false,
+    "rust-analyzer.check.allTargets": true,
+    "rust-analyzer.check.overrideCommand": [
+        "cargo", 
+        "clippy", 
+        "--message-format=json", 
+        "--no-deps", 
+        "--package", 
+        "tee-controller"
+    ],
+    "rust-analyzer.checkOnSave": true,
+    "rust-analyzer.cargo.loadOutDirsFromCheck": true,
+    "rust-analyzer.files.excludeDirs": [
+        "execution/controller/tests/contracts"
+    ]
+}

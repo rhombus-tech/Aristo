@@ -53,7 +53,11 @@ type ShuttleVM struct {
     coordinator     *coordination.Coordinator
     monitoringCtx   context.Context
     monitoringCancel context.CancelFunc
-    teeRegistry *compute.TEERegistry
+    teeRegistry     *compute.TEERegistry
+    
+    // Attestation verification system
+    attestationCache  map[ids.ID]*Attestation  // Cache of verified attestations
+    attestationMutex  sync.RWMutex             // Mutex for thread-safe access to the cache
 }
 
 func New(ctx context.Context, config *Config, logger logging.Logger, db database.Database) (*ShuttleVM, error) {
@@ -149,17 +153,18 @@ func New(ctx context.Context, config *Config, logger logging.Logger, db database
     vm := &ShuttleVM{
         chainID:          chainID,
         config:           config,
-        db:              db,
-        computeNodes:    computeNodes,
-        verifier:        stateVerifier,
-        logger:          logger,
-        codeValidator:   codeValidator,
-        teeValidator:    teeValidator,
-        stateManager:    stateManager, // stateManager already implements the interface
-        coordinator:     coordinator,
-        regionManager:   regionManager,
-        monitoringCtx:   monitoringCtx,
+        db:               db,
+        computeNodes:     computeNodes,
+        verifier:         stateVerifier,
+        logger:           logger,
+        codeValidator:    codeValidator,
+        teeValidator:     teeValidator,
+        stateManager:     stateManager, // stateManager already implements the interface
+        coordinator:      coordinator,
+        regionManager:    regionManager,
+        monitoringCtx:    monitoringCtx,
         monitoringCancel: monitoringCancel,
+        attestationCache: make(map[ids.ID]*Attestation),
     }
 
     // Start monitoring if not in verification-only mode
@@ -378,7 +383,24 @@ func (vm *ShuttleVM) initializeComputeConnections(ctx context.Context) error {
 
 
 func (vm *ShuttleVM) ValidateTransaction(ctx context.Context, tx *chain.Transaction) error {
-    // Verify transaction format and auth
+    // Step 1: First check if we have a valid attestation for this transaction in cache
+    attestation, err := vm.getAttestationForTx(ctx, tx.ID())
+    if err == nil && attestation != nil {
+        // We have a cached attestation, verify it's still valid
+        if err := vm.verifyAttestation(ctx, attestation); err == nil {
+            vm.logger.Info("transaction validated using cached attestation",
+                zap.String("txID", tx.ID().String()),
+                zap.String("type", attestation.Type.String()))
+            return nil // Successfully validated using cached attestation
+        } else {
+            vm.logger.Warn("cached attestation invalid, falling back to verification",
+                zap.String("txID", tx.ID().String()),
+                zap.Error(err))
+            // Attestation is invalid, continue with normal verification
+        }
+    }
+
+    // Step 2: If no valid cached attestation, verify transaction format and auth
     if err := tx.Verify(ctx); err != nil {
         return err
     }
@@ -391,18 +413,39 @@ func (vm *ShuttleVM) ValidateTransaction(ctx context.Context, tx *chain.Transact
         return err
     }
 
-    // For each action that includes TEE execution results
+    // Step 3: Check if we're in verification-only mode
+    if vm.config.VerificationOnly {
+        return fmt.Errorf("no valid attestation for transaction %s and verification-only mode enabled", tx.ID())
+    }
+
+    // Step 4: For each action that includes TEE execution results
     for _, action := range tx.Actions {
         if execAction, ok := action.(*actions.SendEventAction); ok {
-            // Construct execution result from action's attestations
-            result := &compute.ExecutionResult{
-                StateHash:    execAction.Attestations[0].Data, // Use first attestation's data as state hash
-                Attestations: execAction.Attestations,
-            }
-            
-            // Verify the TEE execution
-            if err := vm.verifyTEEExecution(ctx, action, result); err != nil {
-                return fmt.Errorf("TEE execution verification failed: %w", err)
+            // Check if the action already includes attestations
+            if len(execAction.Attestations) > 0 {
+                // Construct execution result from action's attestations
+                result := &compute.ExecutionResult{
+                    StateHash:    execAction.Attestations[0].Data, // Use first attestation's data as state hash
+                    Attestations: execAction.Attestations,
+                }
+                
+                // Verify the TEE execution
+                if err := vm.verifyTEEExecution(ctx, action, result); err != nil {
+                    return fmt.Errorf("TEE execution verification failed: %w", err)
+                }
+                
+                // Store this verified attestation in cache for future use
+                if err := vm.cacheAttestationFromExecution(ctx, tx.ID(), execAction); err != nil {
+                    vm.logger.Warn("failed to cache attestation", 
+                        zap.String("txID", tx.ID().String()), 
+                        zap.Error(err))
+                    // Non-critical error, continue with validation
+                }
+            } else {
+                // No attestations provided, execute the transaction
+                if err := vm.validateTxWithExecution(ctx, tx); err != nil {
+                    return err
+                }
             }
         }
         

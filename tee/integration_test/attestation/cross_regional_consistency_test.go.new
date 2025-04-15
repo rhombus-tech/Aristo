@@ -1,0 +1,720 @@
+// Package attestation provides integration tests for TEE attestation in the regional mesh network
+package attestation
+
+import (
+	"bytes"
+	"fmt"
+	"math/rand"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+)
+
+const (
+	// Region constants used in cross-regional tests
+	RegionUSEast    = "us-east"
+	RegionEUCentral = "eu-central"
+	RegionAPSouth   = "ap-south"
+
+	// Policy names for cross-regional tests
+	PolicyMaxAccumulatorDivergence  = "max_accumulator_divergence"
+	PolicyMaxConvergenceTime        = "max_convergence_time"
+	PolicyRequireDualAttestation    = "require_dual_attestation"
+	PolicyAllowExternalExecution    = "allow_external_execution"
+	PolicyRestrictedOperations      = "restricted_operations"
+	PolicyDataSovereigntyCompliance = "data_sovereignty_compliance"
+)
+
+// Helper function to get the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// MultiRegionNetwork simulates a network of regional TEE registries
+type MultiRegionNetwork struct {
+	regions map[string]*MockTEERegistry
+	mu      sync.RWMutex
+}
+
+// NewMultiRegionNetwork creates a new multi-region network with the specified regions
+func NewMultiRegionNetwork(regionIDs ...string) *MultiRegionNetwork {
+	network := &MultiRegionNetwork{
+		regions: make(map[string]*MockTEERegistry),
+	}
+
+	for _, regionID := range regionIDs {
+		// Create a registry for each region
+		registry := &MockTEERegistry{
+			allowedRegions:     []string{regionID},
+			regionMeasurements: make(map[string][]byte),
+			teeIDs:             make(map[string][]byte),
+			accumulatorTEEs:    make(map[string][]byte),
+			usedAttestations:   make(map[string]bool),
+			network:            network,
+		}
+		
+		// Generate region-specific measurement
+		measurement := make([]byte, 32)
+		rand.Read(measurement)
+		registry.regionMeasurements[regionID] = measurement
+		
+		network.regions[regionID] = registry
+	}
+
+	return network
+}
+
+// GetRegistry returns the registry for a specific region
+func (n *MultiRegionNetwork) GetRegistry(regionID string) *MockTEERegistry {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.regions[regionID]
+}
+
+// IsTEERegistered checks if a TEE is registered in this registry
+func (r *MockTEERegistry) IsTEERegistered(enclaveID []byte) bool {
+	_, exists := r.teeIDs[string(enclaveID)]
+	return exists
+}
+
+// RegisterTEE registers a TEE with the registry
+func (r *MockTEERegistry) RegisterTEE(enclaveID, measurement []byte) {
+	r.teeIDs[string(enclaveID)] = measurement
+}
+
+// RegisterTEEInAccumulator adds a TEE to the cryptographic accumulator
+func (r *MockTEERegistry) RegisterTEEInAccumulator(enclaveID, measurement []byte) {
+	r.accumulatorTEEs[string(enclaveID)] = measurement
+}
+
+// SetRegionalPolicy sets a policy for a specific region
+func (r *MockTEERegistry) SetRegionalPolicy(regionID string, policyName string, value interface{}) {
+	if r.regionalPolicies == nil {
+		r.regionalPolicies = make(map[string]map[string]interface{})
+	}
+	
+	if r.regionalPolicies[regionID] == nil {
+		r.regionalPolicies[regionID] = make(map[string]interface{})
+	}
+	
+	r.regionalPolicies[regionID][policyName] = value
+}
+
+// VerifyAttestation checks if an attestation is valid according to registry rules
+func (r *MockTEERegistry) VerifyAttestation(attestation *Attestation) (bool, error) {
+	// Basic validation
+	if attestation == nil {
+		return false, fmt.Errorf("nil attestation")
+	}
+
+	// Check region
+	if attestation.RegionID != r.regionID {
+		return false, fmt.Errorf("region mismatch: expected %s, got %s", r.regionID, attestation.RegionID)
+	}
+
+	// Verify the TEE is registered
+	if !r.IsTEERegistered(attestation.EnclaveID) {
+		return false, fmt.Errorf("TEE not registered")
+	}
+
+	// Verify measurement matches
+	expectedMeasurement := r.teeIDs[string(attestation.EnclaveID)]
+	if !bytes.Equal(expectedMeasurement, attestation.Measurement) {
+		return false, fmt.Errorf("measurement mismatch")
+	}
+
+	// Check regional policies
+	// For EU region, require dual attestation
+	if r.regionID == RegionEUCentral {
+		requireDual, exists := r.regionalPolicies[RegionEUCentral][PolicyRequireDualAttestation]
+		if exists && requireDual.(bool) && attestation.CrossSignature == nil {
+			return false, fmt.Errorf("dual attestation required in EU region")
+		}
+	}
+
+	// For AP region, disallow external execution
+	if r.regionID == RegionAPSouth {
+		if attestation.Data != nil && strings.Contains(string(attestation.Data), "external_execution=true") {
+			return false, fmt.Errorf("external execution not allowed in AP region")
+		}
+	}
+
+	return true, nil
+}
+
+// GetNetwork returns the network this registry belongs to
+func (r *MockTEERegistry) GetNetwork() *MultiRegionNetwork {
+	return r.network
+}
+
+// ConfigureCrossRegionalVerification sets up cross-regional verification
+func (n *MultiRegionNetwork) ConfigureCrossRegionalVerification() {
+	// Allow each registry to verify attestations from all regions
+	for regionID, registry := range n.regions {
+		for otherRegionID := range n.regions {
+			registry.allowedRegions = append(registry.allowedRegions, otherRegionID)
+		}
+		
+		// Initialize regional policies map if not already done
+		if registry.regionalPolicies == nil {
+			registry.regionalPolicies = make(map[string]map[string]interface{})
+		}
+		
+		// Initialize this region's policy map
+		registry.regionalPolicies[regionID] = make(map[string]interface{})
+		
+		// Set region-specific policies
+		if regionID == RegionEUCentral {
+			// EU has stricter policies
+			registry.regionalPolicies[regionID][PolicyRequireDualAttestation] = true
+			registry.regionalPolicies[regionID][PolicyRestrictedOperations] = []string{"personal_data_access", "key_generation"}
+		} else if regionID == RegionAPSouth {
+			// AP region restricts external execution
+			registry.regionalPolicies[regionID][PolicyAllowExternalExecution] = false
+		} else if regionID == RegionUSEast {
+			// US has less strict policies
+			registry.regionalPolicies[regionID][PolicyRequireDualAttestation] = false
+			registry.regionalPolicies[regionID][PolicyAllowExternalExecution] = true
+		}
+	}
+}
+
+// PropagateAccumulator propagates TEE from one region to another with simulated latency
+func (n *MultiRegionNetwork) PropagateAccumulator(sourceRegion, targetRegion string, enclaveID, measurement []byte, latency int) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	
+	// Get source and target registries
+	sourceRegistry := n.regions[sourceRegion]
+	targetRegistry := n.regions[targetRegion]
+	
+	if sourceRegistry == nil || targetRegistry == nil {
+		return -1 // Invalid regions
+	}
+	
+	// Check if the TEE is registered in the source region
+	if !sourceRegistry.IsTEERegistered(enclaveID) {
+		return -1 // TEE not registered
+	}
+	
+	// Get accumulator value from source
+	sourceAccumulator := sourceRegistry.accumulatorTEEs[string(enclaveID)]
+	if sourceAccumulator == nil {
+		return -1 // Accumulator not found
+	}
+	
+	// Register TEE in target region with the same measurement
+	targetRegistry.RegisterTEE(enclaveID, measurement)
+	
+	// Add to accumulator in target region
+	targetRegistry.RegisterTEEInAccumulator(enclaveID, measurement)
+	
+	return latency // Return simulated propagation latency
+}
+
+// RegionalPolicyEnforcer simulates regional policy enforcement
+type RegionalPolicyEnforcer struct {
+	network *MultiRegionNetwork
+}
+
+// NewRegionalPolicyEnforcer creates a new regional policy enforcer
+func NewRegionalPolicyEnforcer(network *MultiRegionNetwork) *RegionalPolicyEnforcer {
+	return &RegionalPolicyEnforcer{
+		network: network,
+	}
+}
+
+// ConfigureDataSovereigntyPolicies sets up different data sovereignty policies by region
+func (p *RegionalPolicyEnforcer) ConfigureDataSovereigntyPolicies() {
+	// Configure EU regional policies (GDPR-like)
+	euRegistry := p.network.GetRegistry(RegionEUCentral)
+	euRegistry.SetRegionalPolicy(RegionEUCentral, PolicyDataSovereigntyCompliance, "GDPR")
+	euRegistry.SetRegionalPolicy(RegionEUCentral, PolicyRequireDualAttestation, true)
+	
+	// Configure AP regional policies (local data hosting requirements)
+	apRegistry := p.network.GetRegistry(RegionAPSouth)
+	apRegistry.SetRegionalPolicy(RegionAPSouth, PolicyDataSovereigntyCompliance, "LOCAL_HOSTING")
+	apRegistry.SetRegionalPolicy(RegionAPSouth, PolicyAllowExternalExecution, false)
+	
+	// Configure US regional policies (less restrictive)
+	usRegistry := p.network.GetRegistry(RegionUSEast)
+	usRegistry.SetRegionalPolicy(RegionUSEast, PolicyDataSovereigntyCompliance, "STANDARD")
+	usRegistry.SetRegionalPolicy(RegionUSEast, PolicyAllowExternalExecution, true)
+}
+
+// ConfigureAccumulatorThresholds sets the thresholds for acceptable accumulator divergence
+func (p *RegionalPolicyEnforcer) ConfigureAccumulatorThresholds() {
+	// Set default thresholds
+	p.accumulatorDivergenceThreshold = 10 // Default 10% threshold
+}
+
+// SetAccumulatorDivergenceThreshold sets the threshold for acceptable divergence between regional accumulators
+func (p *RegionalPolicyEnforcer) SetAccumulatorDivergenceThreshold(percentThreshold int) {
+	p.accumulatorDivergenceThreshold = percentThreshold
+}
+
+// GetAccumulatorDivergenceThreshold returns the current threshold for acceptable divergence
+func (p *RegionalPolicyEnforcer) GetAccumulatorDivergenceThreshold() int {
+	return p.accumulatorDivergenceThreshold
+}
+
+// AllowCrossRegionalAttestation determines if cross-regional attestation is allowed between two regions
+// based on their accumulator synchronization status
+func (p *RegionalPolicyEnforcer) AllowCrossRegionalAttestation(sourceRegion, targetRegion string) bool {
+	// Get registries for both regions
+	sourceRegistry := p.network.GetRegistry(sourceRegion)
+	targetRegistry := p.network.GetRegistry(targetRegion)
+	
+	if sourceRegistry == nil || targetRegistry == nil {
+		return false
+	}
+	
+	// Calculate accumulator sizes
+	sourceSize := len(sourceRegistry.accumulatorTEEs)
+	targetSize := len(targetRegistry.accumulatorTEEs)
+	
+	if sourceSize == 0 || targetSize == 0 {
+		return false
+	}
+	
+	// Calculate divergence percentage
+	maxSize := sourceSize
+	if targetSize > maxSize {
+		maxSize = targetSize
+	}
+	
+	divergence := float64(maxSize - min(sourceSize, targetSize)) / float64(maxSize)
+	threshold := float64(p.accumulatorDivergenceThreshold) / 100.0
+	
+	// Allow if divergence is below threshold
+	return divergence <= threshold
+}
+
+// Helper function to get the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// VerifyCrossRegional performs verification that requires cross-regional validation
+func (v *AttestationVerifier) VerifyCrossRegional(attestation *Attestation, targetRegion string) (bool, error) {
+	// First verify the attestation locally
+	localResult, localErr := v.Verify(attestation)
+	if !localResult {
+		return false, localErr
+	}
+
+	// Check if cross-regional verification is allowed between these regions
+	sourceRegion := attestation.RegionID
+
+	// Simulate checking for accumulator divergence
+	sourceRegistry := v.registry
+	targetRegistry := v.registry.GetNetwork().GetRegistry(targetRegion)
+
+	if sourceRegistry == nil || targetRegistry == nil {
+		return false, fmt.Errorf("invalid source or target region")
+	}
+
+	// Calculate accumulator sizes to determine divergence
+	sourceSize := len(sourceRegistry.(*MockTEERegistry).accumulatorTEEs)
+	targetSize := len(targetRegistry.(*MockTEERegistry).accumulatorTEEs)
+
+	if sourceSize == 0 || targetSize == 0 {
+		return false, fmt.Errorf("empty accumulator in source or target region")
+	}
+
+	// Calculate divergence percentage
+	maxSize := sourceSize
+	if targetSize > maxSize {
+		maxSize = targetSize
+	}
+
+	divergence := float64(maxSize-min(sourceSize, targetSize)) / float64(maxSize)
+	threshold := 0.05 // 5% threshold
+
+	if divergence > threshold {
+		return false, fmt.Errorf("accumulator divergence exceeds threshold: %.2f%% (max allowed: %.2f%%)", 
+			divergence*100, threshold*100)
+	}
+
+	// If we pass divergence check, attempt to verify the attestation in the target region
+	// This is a simulation for the test; in a real system, this would involve network calls
+	attestation.RegionID = targetRegion
+	targetResult, targetErr := targetRegistry.VerifyAttestation(attestation)
+	attestation.RegionID = sourceRegion // Restore original region
+
+	if !targetResult {
+		return false, fmt.Errorf("cross-regional verification failed: %v", targetErr)
+	}
+
+	return true, nil
+}
+
+// TestCrossRegionalPolicyPropagation tests that regional policies are correctly enforced
+// during TEE attestation propagation across regions with different policy requirements
+func TestCrossRegionalPolicyPropagation(t *testing.T) {
+	// Create a multi-region network with three regions having different policy requirements
+	network := NewMultiRegionNetwork(RegionUSEast, RegionEUCentral, RegionAPSouth)
+	network.ConfigureCrossRegionalVerification()
+
+	// Get registries for each region
+	usRegistry := network.GetRegistry(RegionUSEast)
+	euRegistry := network.GetRegistry(RegionEUCentral)
+	apRegistry := network.GetRegistry(RegionAPSouth)
+
+	// Create verifiers for each region
+	usVerifier := NewAttestationVerifier(usRegistry)
+	euVerifier := NewAttestationVerifier(euRegistry)
+	apVerifier := NewAttestationVerifier(apRegistry)
+
+	// Configure regional policies with different requirements
+	// 1. EU requires dual attestation
+	euRegistry.SetRegionalPolicy(RegionEUCentral, PolicyRequireDualAttestation, true)
+	// 2. AP disallows external execution
+	apRegistry.SetRegionalPolicy(RegionAPSouth, PolicyAllowExternalExecution, false)
+	// 3. US allows both single attestation and external execution
+	usRegistry.SetRegionalPolicy(RegionUSEast, PolicyRequireDualAttestation, false)
+	usRegistry.SetRegionalPolicy(RegionUSEast, PolicyAllowExternalExecution, true)
+
+	// Register a test TEE in the US region
+	baseEnclaveID := make([]byte, 32)
+	baseMeasurement := make([]byte, 32)
+	rand.Read(baseEnclaveID)
+	rand.Read(baseMeasurement)
+
+	usRegistry.RegisterTEE(baseEnclaveID, baseMeasurement)
+	usRegistry.RegisterTEEInAccumulator(baseEnclaveID, baseMeasurement)
+
+	// TEST CASE 1: TEE Propagation with Single Attestation
+	t.Run("SingleAttestationPropagation", func(t *testing.T) {
+		// Create a single attestation for the US region
+		singleAttestation := createTestSGXAttestation()
+		singleAttestation.EnclaveID = baseEnclaveID
+		singleAttestation.Measurement = baseMeasurement
+		singleAttestation.RegionID = RegionUSEast
+
+		// Verify in US region - should pass
+		usResult, usErr := usVerifier.Verify(singleAttestation)
+		assert.True(t, usResult, "Single attestation should pass in US region")
+		assert.NoError(t, usErr, "No error expected for single attestation in US region")
+
+		// Propagate the TEE to EU region
+		network.PropagateAccumulator(RegionUSEast, RegionEUCentral, baseEnclaveID, baseMeasurement, 10)
+
+		// The accumulator is now updated in EU region, but the single attestation should still fail
+		// due to EU region's dual attestation policy
+		singleAttestation.RegionID = RegionEUCentral
+		euResult, euErr := euVerifier.Verify(singleAttestation)
+		assert.False(t, euResult, "Single attestation should fail in EU region despite accumulator propagation")
+		assert.Error(t, euErr, "Error expected for single attestation in EU region")
+		assert.Contains(t, euErr.Error(), "dual attestation", "Error should indicate dual attestation requirement")
+
+		// Create a dual attestation that should pass in EU
+		dualAttestation := createTestDualAttestation()
+		dualAttestation.EnclaveID = baseEnclaveID
+		dualAttestation.Measurement = baseMeasurement
+		dualAttestation.RegionID = RegionEUCentral
+		dualAttestation.CrossSignature = make([]byte, 64) // Add cross-signature
+		rand.Read(dualAttestation.CrossSignature)
+
+		// Verify in EU region with dual attestation - should pass
+		euResult, euErr = euVerifier.Verify(dualAttestation)
+		assert.True(t, euResult, "Dual attestation should pass in EU region")
+		assert.NoError(t, euErr, "No error expected for dual attestation in EU region")
+	})
+
+	// TEST CASE 2: External Execution Propagation
+	t.Run("ExternalExecutionPropagation", func(t *testing.T) {
+		// Create an external execution attestation for the US region
+		externalAttestation := createTestSGXAttestation()
+		externalAttestation.EnclaveID = baseEnclaveID
+		externalAttestation.Measurement = baseMeasurement
+		externalAttestation.RegionID = RegionUSEast
+		externalAttestation.Data = []byte("external_execution=true;transaction=123")
+
+		// Verify in US region - should pass as US allows external execution
+		usResult, usErr := usVerifier.Verify(externalAttestation)
+		assert.True(t, usResult, "External execution should pass in US region")
+		assert.NoError(t, usErr, "No error expected for external execution in US region")
+
+		// Propagate the TEE to AP region
+		network.PropagateAccumulator(RegionUSEast, RegionAPSouth, baseEnclaveID, baseMeasurement, 15)
+
+		// The accumulator is now updated in AP region, but the external execution attestation should fail
+		// due to AP region's policy against external execution
+		externalAttestation.RegionID = RegionAPSouth
+		apResult, apErr := apVerifier.Verify(externalAttestation)
+		assert.False(t, apResult, "External execution should fail in AP region despite accumulator propagation")
+		assert.Error(t, apErr, "Error expected for external execution in AP region")
+		assert.Contains(t, apErr.Error(), "external execution", "Error should indicate external execution restriction")
+
+		// Create a standard attestation without external execution
+		standardAttestation := createTestSGXAttestation()
+		standardAttestation.EnclaveID = baseEnclaveID
+		standardAttestation.Measurement = baseMeasurement
+		standardAttestation.RegionID = RegionAPSouth
+		standardAttestation.Data = []byte("standard_execution=true;transaction=123")
+
+		// Verify in AP region without external execution - should pass
+		apResult, apErr = apVerifier.Verify(standardAttestation)
+		assert.True(t, apResult, "Standard execution should pass in AP region")
+		assert.NoError(t, apErr, "No error expected for standard execution in AP region")
+	})
+
+	// TEST CASE 3: Cross-Regional Policy Consistency
+	t.Run("CrossRegionalPolicyConsistency", func(t *testing.T) {
+		// Create a multi-region TEE that needs to be valid in all regions
+		multiRegionEnclaveID := make([]byte, 32)
+		multiRegionMeasurement := make([]byte, 32)
+		rand.Read(multiRegionEnclaveID)
+		rand.Read(multiRegionMeasurement)
+
+		// Register in all regions
+		for _, registry := range []*MockTEERegistry{usRegistry, euRegistry, apRegistry} {
+			registry.RegisterTEE(multiRegionEnclaveID, multiRegionMeasurement)
+			registry.RegisterTEEInAccumulator(multiRegionEnclaveID, multiRegionMeasurement)
+		}
+
+		// Create an attestation that should be valid in all regions
+		// It must be dual attestation (for EU) and avoid external execution (for AP)
+		universalAttestation := createTestDualAttestation()
+		universalAttestation.EnclaveID = multiRegionEnclaveID
+		universalAttestation.Measurement = multiRegionMeasurement
+		universalAttestation.CrossSignature = make([]byte, 64)
+		rand.Read(universalAttestation.CrossSignature)
+		universalAttestation.Data = []byte("standard_execution=true;transaction=999")
+
+		// Check in all regions
+		for regionID, verifier := range map[string]*AttestationVerifier{
+			RegionUSEast:    usVerifier,
+			RegionEUCentral: euVerifier,
+			RegionAPSouth:   apVerifier,
+		} {
+			universalAttestation.RegionID = regionID
+			result, err := verifier.Verify(universalAttestation)
+			assert.True(t, result, "Universal attestation should pass in %s region", regionID)
+			assert.NoError(t, err, "No error expected for universal attestation in %s region", regionID)
+		}
+
+		// Simulate a latency-induced accumulator update issue
+		// When one region updates its policies but propagation hasn't completed
+		// Set a new stricter policy in EU region
+		euRegistry.SetRegionalPolicy(RegionEUCentral, "strict_measurements", true)
+
+		// Create a test to verify that attestation with AP and US registrations, 
+		// but using EU's new policy, should still pass in AP and US but fail in EU
+		newEnclaveID := make([]byte, 32)
+		newMeasurement := make([]byte, 32)
+		rand.Read(newEnclaveID)
+		rand.Read(newMeasurement)
+
+		// Only register in US and AP
+		usRegistry.RegisterTEE(newEnclaveID, newMeasurement)
+		usRegistry.RegisterTEEInAccumulator(newEnclaveID, newMeasurement)
+		// Propagate only to AP, not to EU
+		network.PropagateAccumulator(RegionUSEast, RegionAPSouth, newEnclaveID, newMeasurement, 5)
+
+		// Create a policy-compliant attestation
+		policyAttestation := createTestDualAttestation()
+		policyAttestation.EnclaveID = newEnclaveID
+		policyAttestation.Measurement = newMeasurement
+		policyAttestation.CrossSignature = make([]byte, 64)
+		rand.Read(policyAttestation.CrossSignature)
+		policyAttestation.Data = []byte("standard_execution=true;transaction=555")
+
+		// Test in US - should pass
+		policyAttestation.RegionID = RegionUSEast
+		usResult, usErr := usVerifier.Verify(policyAttestation)
+		assert.True(t, usResult, "Policy attestation should pass in US region")
+		assert.NoError(t, usErr, "No error expected in US region")
+
+		// Test in AP - should pass
+		policyAttestation.RegionID = RegionAPSouth
+		apResult, apErr := apVerifier.Verify(policyAttestation)
+		assert.True(t, apResult, "Policy attestation should pass in AP region")
+		assert.NoError(t, apErr, "No error expected in AP region")
+
+		// Test in EU - should fail as not registered in EU and EU has stricter policy
+		policyAttestation.RegionID = RegionEUCentral
+		euResult, euErr := euVerifier.Verify(policyAttestation)
+		assert.False(t, euResult, "Policy attestation should fail in EU region")
+		assert.Error(t, euErr, "Error expected in EU region due to missing registration")
+	})
+}
+
+// TestCrossRegionalAccumulatorConsistency tests accumulator consistency across regions
+func TestCrossRegionalAccumulatorConsistency(t *testing.T) {
+	// Create a multi-region network
+	network := NewMultiRegionNetwork(RegionUSEast, RegionEUCentral, RegionAPSouth)
+	network.ConfigureCrossRegionalVerification()
+
+	// Configure the policy enforcer
+	enforcer := NewRegionalPolicyEnforcer(network)
+	enforcer.ConfigureAccumulatorThresholds()
+
+	// Get registries for each region
+	usRegistry := network.GetRegistry(RegionUSEast)
+	euRegistry := network.GetRegistry(RegionEUCentral)
+	apRegistry := network.GetRegistry(RegionAPSouth)
+
+	// Generate TEE details
+	enclaveID := make([]byte, 32)
+	measurement := make([]byte, 32)
+	rand.Read(enclaveID)
+	rand.Read(measurement)
+
+	// Register the TEE in all regions
+	usRegistry.RegisterTEE(enclaveID, measurement)
+	usRegistry.RegisterTEEInAccumulator(enclaveID, measurement)
+
+	euRegistry.RegisterTEE(enclaveID, measurement)
+	euRegistry.RegisterTEEInAccumulator(enclaveID, measurement)
+
+	apRegistry.RegisterTEE(enclaveID, measurement)
+	apRegistry.RegisterTEEInAccumulator(enclaveID, measurement)
+
+	// Verify that accumulator value is consistent across regions
+	usValue := usRegistry.accumulatorTEEs[string(enclaveID)]
+	euValue := euRegistry.accumulatorTEEs[string(enclaveID)]
+	apValue := apRegistry.accumulatorTEEs[string(enclaveID)]
+
+	assert.True(t, bytes.Equal(usValue, euValue), "US and EU accumulator values should match")
+	assert.True(t, bytes.Equal(usValue, apValue), "US and AP accumulator values should match")
+
+	// Simulated network delay between regions
+	// We expect the accumulator to propagate successfully within these thresholds
+	usEULatency := network.PropagateAccumulator(RegionUSEast, RegionEUCentral, enclaveID, measurement, 5)
+	usAPLatency := network.PropagateAccumulator(RegionUSEast, RegionAPSouth, enclaveID, measurement, 10)
+
+	assert.True(t, usEULatency < 10, "US-EU latency should be under threshold")
+	assert.True(t, usAPLatency < 15, "US-AP latency should be under threshold")
+}
+
+// NOTE: Helper functions for attestation creation are imported from attestation_tests.go
+
+// TestAccumulatorDivergenceDetection tests the detection of accumulator divergence across regions
+func TestAccumulatorDivergenceDetection(t *testing.T) {
+	// Create a multi-region network
+	network := NewMultiRegionNetwork(RegionUSEast, RegionEUCentral, RegionAPSouth)
+	network.ConfigureCrossRegionalVerification()
+
+	// Configure policy enforcer with tight divergence thresholds
+	enforcer := NewRegionalPolicyEnforcer(network)
+	enforcer.ConfigureAccumulatorThresholds()
+
+	// Set a specific threshold for accumulator divergence
+	enforcer.SetAccumulatorDivergenceThreshold(5) // 5% maximum divergence allowed
+
+	// Get registries for each region
+	usRegistry := network.GetRegistry(RegionUSEast)
+	euRegistry := network.GetRegistry(RegionEUCentral)
+	apRegistry := network.GetRegistry(RegionAPSouth)
+
+	// Generate TEE details for initial measurement
+	baseEnclaveID := make([]byte, 32)
+	baseMeasurement := make([]byte, 32)
+	rand.Read(baseEnclaveID)
+	rand.Read(baseMeasurement)
+
+	// Create verifiers using the registries
+	usVerifier := NewAttestationVerifier(usRegistry)
+	euVerifier := NewAttestationVerifier(euRegistry)
+	apVerifier := NewAttestationVerifier(apRegistry)
+
+	// Register and propagate the base measurement to all regions
+	usRegistry.RegisterTEE(baseEnclaveID, baseMeasurement)
+	usRegistry.RegisterTEEInAccumulator(baseEnclaveID, baseMeasurement)
+
+	// Propagate to EU and AP regions
+	network.PropagateAccumulator(RegionUSEast, RegionEUCentral, baseEnclaveID, baseMeasurement, 5)
+	network.PropagateAccumulator(RegionUSEast, RegionAPSouth, baseEnclaveID, baseMeasurement, 5)
+
+	// Create a valid attestation using the base measurement
+	baseAttestation := createTestSGXAttestation()
+	baseAttestation.EnclaveID = baseEnclaveID
+	baseAttestation.Measurement = baseMeasurement
+
+	// Verify attestation works in all regions
+	for _, region := range []string{RegionUSEast, RegionEUCentral, RegionAPSouth} {
+		baseAttestation.RegionID = region
+		var result bool
+		var err error
+
+		switch region {
+		case RegionUSEast:
+			result, err = usVerifier.Verify(baseAttestation)
+		case RegionEUCentral:
+			result, err = euVerifier.Verify(baseAttestation)
+		case RegionAPSouth:
+			result, err = apVerifier.Verify(baseAttestation)
+		}
+
+		assert.True(t, result, "Base attestation should pass in %s region", region)
+		assert.NoError(t, err, "No error expected for base attestation in %s region", region)
+	}
+
+	// Now simulate accumulator divergence by registering additional TEEs
+	// only in US region without proper propagation to other regions
+	divergentCount := 10
+	for i := 0; i < divergentCount; i++ {
+		divergentEnclaveID := make([]byte, 32)
+		divergentMeasurement := make([]byte, 32)
+		rand.Read(divergentEnclaveID)
+		rand.Read(divergentMeasurement)
+
+		// Only register in US region
+		usRegistry.RegisterTEE(divergentEnclaveID, divergentMeasurement)
+		usRegistry.RegisterTEEInAccumulator(divergentEnclaveID, divergentMeasurement)
+	}
+
+	// Calculate divergence percentage
+	usTEECount := len(usRegistry.accumulatorTEEs)
+	euTEECount := len(euRegistry.accumulatorTEEs)
+	threshold := float64(enforcer.GetAccumulatorDivergenceThreshold()) / 100.0
+	divergencePercentage := float64(usTEECount-euTEECount) / float64(usTEECount)
+
+	// We expect the divergence to be detected
+	assert.True(t, divergencePercentage > threshold, "Divergence percentage should exceed threshold")
+	
+	// Test if the enforcement mechanism detects this divergence
+	isAllowed := enforcer.AllowCrossRegionalAttestation(RegionUSEast, RegionEUCentral)
+	assert.False(t, isAllowed, "Cross-regional attestation should be blocked due to accumulator divergence")
+
+	// Create a new attestation that would need cross-regional verification
+	crossRegionAttestation := createTestSGXAttestation()
+	crossRegionAttestation.EnclaveID = baseEnclaveID
+	crossRegionAttestation.Measurement = baseMeasurement
+	crossRegionAttestation.RegionID = RegionUSEast
+	crossRegionAttestation.Data = []byte("cross_regional_verification=true;source=EU")
+
+	// Because of the accumulator divergence, verification that requires cross-regional
+	// attestation should fail
+	result, err := usVerifier.VerifyCrossRegional(crossRegionAttestation, RegionEUCentral)
+	assert.False(t, result, "Cross-regional attestation should fail due to accumulator divergence")
+	assert.Error(t, err, "Error expected for cross-regional attestation with divergent accumulators")
+	assert.Contains(t, err.Error(), "accumulator divergence", "Error should mention accumulator divergence")
+
+	// Now simulate propagation of the missing TEEs to synchronize accumulators
+	for enclaveIDBytes, measurementBytes := range usRegistry.accumulatorTEEs {
+		enclaveID := []byte(enclaveIDBytes)
+		network.PropagateAccumulator(RegionUSEast, RegionEUCentral, enclaveID, measurementBytes, 5)
+		network.PropagateAccumulator(RegionUSEast, RegionAPSouth, enclaveID, measurementBytes, 5)
+	}
+
+	// After propagation, enforcer should allow cross-regional attestation
+	isAllowed = enforcer.AllowCrossRegionalAttestation(RegionUSEast, RegionEUCentral)
+	assert.True(t, isAllowed, "Cross-regional attestation should be allowed after synchronization")
+
+	// And cross-regional verification should now succeed
+	result, err = usVerifier.VerifyCrossRegional(crossRegionAttestation, RegionEUCentral)
+	assert.True(t, result, "Cross-regional attestation should pass after accumulator synchronization")
+	assert.NoError(t, err, "No error expected after accumulator synchronization")
+}

@@ -1,0 +1,945 @@
+// Package attestation provides integration tests for TEE attestation in the regional mesh network
+package attestation
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/ava-labs/avalanchego/ids"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// Define constants for attestation types
+const (
+	SGXAttestation  = iota // Intel SGX Attestation
+	SEVAttestation         // AMD SEV Attestation
+	DualAttestation        // Dual (SGX+SEV) Attestation
+)
+
+// Define constants for state proof types
+const (
+	AccumulatorProof = iota // Accumulator-based state proof
+	MerkleProof             // Merkle-based state proof
+	DirectProof             // Direct state change proof
+)
+
+// Attestation represents a cryptographic proof of execution from a TEE
+type Attestation struct {
+	TxID           ids.ID                // Transaction ID this attestation is for
+	Type           int                   // Type of attestation (SGX, SEV, or Dual)
+	EnclaveID      []byte                // Public key or identifier of the enclave
+	RegionID       string                // Region identifier where the attestation was generated
+	Measurement    []byte                // Enclave measurement (hash of enclave code)
+	Signature      []byte                // Primary signature of the attestation
+	CrossSignature []byte                // Secondary signature for dual attestation
+	Timestamp      time.Time             // Time when the attestation was generated
+	TimestampToken []byte                // Timestamp token from timeserver
+	Data           []byte                // Result data from execution (state hash)
+	StateProof     *StateTransitionProof // Proof of state transition
+	Accumulator    *AccumulatorWitness   // Accumulator witness for verification
+}
+
+// StateTransitionProof represents a proof of state changes without requiring full state reconstruction
+type StateTransitionProof struct {
+	Type                int      // Type of state proof (Accumulator, Merkle, Direct)
+	AccumulatorValue    []byte   // Current accumulator value after transaction
+	PreviousAccumulator []byte   // Previous accumulator value before transaction
+	Witness             []byte   // Witness value for verification
+	ChangedKeys         []string // List of state keys that changed
+	ChangedValues       [][]byte // List of new values for changed keys
+	TxHash              []byte   // Hash of the transaction
+}
+
+// AccumulatorWitness contains data needed to verify a state transition
+type AccumulatorWitness struct {
+	Value           []byte // Witness value
+	LastAccumulator []byte // Last known accumulator value
+	Executor        string // Executor ID
+	Measurement     []byte // Enclave measurement
+	EnclaveType     string // Type of enclave (SGX/SEV)
+	Timestamp       uint64 // Timestamp of the witness
+}
+
+// AttestationVerifier handles verification of attestations
+type AttestationVerifier struct {
+	registry TEERegistry
+}
+
+// NewAttestationVerifier creates a new attestation verifier with the provided registry
+func NewAttestationVerifier(registry TEERegistry) *AttestationVerifier {
+	return &AttestationVerifier{
+		registry: registry,
+	}
+}
+
+// Verify verifies an attestation against the registry
+func (v *AttestationVerifier) Verify(attestation *Attestation) (bool, error) {
+	// Verify attestation type
+	switch attestation.Type {
+	case SGXAttestation, SEVAttestation, DualAttestation:
+		// Valid attestation type
+	default:
+		return false, fmt.Errorf("invalid attestation type: %d", attestation.Type)
+	}
+
+	// Verify enclave ID is registered
+	if !v.registry.IsTEERegistered(attestation.EnclaveID) {
+		return false, fmt.Errorf("enclave not registered: %x", attestation.EnclaveID)
+	}
+
+	// Verify region is allowed
+	if !v.registry.IsRegionAllowed(attestation.RegionID) {
+		return false, fmt.Errorf("region not allowed: %s", attestation.RegionID)
+	}
+
+	// Verify measurement
+	if !v.registry.VerifyMeasurement(attestation.EnclaveID, attestation.Measurement, attestation.RegionID) {
+		return false, fmt.Errorf("invalid measurement")
+	}
+
+	// For dual attestation, verify cross signature
+	if attestation.Type == DualAttestation && len(attestation.CrossSignature) == 0 {
+		return false, fmt.Errorf("missing cross-signature for dual attestation")
+	}
+
+	// Check for replay attacks if enabled
+	registry, ok := v.registry.(*MockTEERegistry)
+	if ok && registry.usedAttestations != nil {
+		// Create a unique identifier for this attestation
+		attestationID := string(attestation.TxID[:]) + string(attestation.Signature)
+
+		// Check if this attestation has already been used
+		if _, exists := registry.usedAttestations[attestationID]; exists {
+			return false, fmt.Errorf("replay attack detected: attestation already used")
+		}
+
+		// Mark this attestation as used
+		registry.usedAttestations[attestationID] = true
+	}
+
+	// Verify timestamp is not in the future
+	if attestation.Timestamp.After(time.Now().Add(5 * time.Minute)) { // Allow 5 min clock skew
+		return false, fmt.Errorf("timestamp in future")
+	}
+
+	// Additional state transition proof verification
+	if attestation.StateProof != nil {
+		// Verify accumulator value matches expected value
+		hash := sha256.Sum256(attestation.TxID[:])
+		expectedAccumulator := updateAccumulator(hash[:])
+
+		if !bytes.Equal(attestation.StateProof.AccumulatorValue, expectedAccumulator) {
+			return false, fmt.Errorf("invalid signature")
+		}
+	}
+
+	// Check for security heuristics if enabled
+	if ok && registry.securityHeuristicsEnabled {
+		// Check if the measurement is in the vulnerable database
+		if registry.vulnerableMeasurements != nil {
+			if cveID, found := registry.vulnerableMeasurements[string(attestation.Measurement)]; found {
+				return false, fmt.Errorf("vulnerable measurement detected: CVE-%s", cveID)
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// VerifyWithAccumulator verifies an attestation with accumulator proof
+// VerifyWithAccumulator verifies an attestation with accumulator proof
+func (v *AttestationVerifier) VerifyWithAccumulator(attestation *Attestation) (bool, error) {
+	// Verify attestation type
+	switch attestation.Type {
+	case SGXAttestation, SEVAttestation, DualAttestation:
+		// Valid attestation type
+	default:
+		return false, nil
+	}
+
+	// Verify enclave ID is registered
+	if !v.registry.IsTEERegistered(attestation.EnclaveID) {
+		return false, nil
+	}
+
+	// Verify region is allowed
+	if !v.registry.IsRegionAllowed(attestation.RegionID) {
+		return false, nil
+	}
+
+	// Verify measurement
+	if !v.registry.VerifyMeasurement(attestation.EnclaveID, attestation.Measurement, attestation.RegionID) {
+		return false, nil
+	}
+
+	// For dual attestation, verify cross signature
+	if attestation.Type == DualAttestation && len(attestation.CrossSignature) == 0 {
+		return false, nil
+	}
+
+	// Verify accumulator proof
+	if attestation.Accumulator != nil {
+		// Verify accumulator witness
+		// This is a simplified implementation
+	}
+
+	return true, nil
+}
+
+// VerifyDCAPBootstrap verifies a DCAP bootstrap attestation
+// VerifyDCAPBootstrap verifies a DCAP bootstrap attestation
+func (v *AttestationVerifier) VerifyDCAPBootstrap(attestation *Attestation) (bool, error) {
+	// Verify attestation type
+	switch attestation.Type {
+	case SGXAttestation, SEVAttestation, DualAttestation:
+		// Valid attestation type
+	default:
+		return false, nil
+	}
+
+	// Verify enclave ID is registered
+	if !v.registry.IsTEERegistered(attestation.EnclaveID) {
+		return false, nil
+	}
+
+	// Verify region is allowed
+	if !v.registry.IsRegionAllowed(attestation.RegionID) {
+		return false, nil
+	}
+
+	// Verify measurement
+	if !v.registry.VerifyMeasurement(attestation.EnclaveID, attestation.Measurement, attestation.RegionID) {
+		return false, nil
+	}
+
+	// For dual attestation, verify cross signature
+	if attestation.Type == DualAttestation && len(attestation.CrossSignature) == 0 {
+		return false, nil
+	}
+
+	// Verify DCAP-specific fields
+	// This is a simplified implementation
+	if !v.registry.IsDCAPSupported() {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// TestAttestationWithAccumulatorProof tests the complete verification path for an attestation with accumulator proof
+func TestAttestationWithAccumulatorProof(t *testing.T) {
+	// Setup test environment with mock TEEs
+	mockRegistry := setupMockTEERegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create attestation with accumulator proof
+	attestation := createTestAttestationWithAccumulator()
+
+	// Register the TEE in the registry for testing
+	mockRegistry.RegisterTEE(attestation.EnclaveID, attestation.Measurement)
+
+	// Verify complete attestation path
+	result, err := verifier.VerifyWithAccumulator(attestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	// Test with tampered accumulator proof
+	tamperedAttestation := tamperAccumulatorProof(attestation)
+	result, err = verifier.VerifyWithAccumulator(tamperedAttestation)
+	assert.Error(t, err)
+	assert.False(t, result)
+	assert.Contains(t, err.Error(), "invalid accumulator value")
+}
+
+// TestDualAttestationVerification tests the verification of dual (SGX+SEV) attestations
+func TestDualAttestationVerification(t *testing.T) {
+	// Setup test environment with mock TEEs
+	mockRegistry := setupMockTEERegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create a dual attestation (SGX + SEV)
+	attestation := createTestDualAttestation()
+
+	// Verify dual attestation
+	result, err := verifier.Verify(attestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	// Test with missing cross-signature
+	invalidAttestation := createTestDualAttestation()
+	invalidAttestation.CrossSignature = nil
+	result, err = verifier.Verify(invalidAttestation)
+	assert.Error(t, err)
+	assert.False(t, result)
+	assert.Contains(t, err.Error(), "missing cross signature")
+}
+
+// TestRegionalAttestationCompliance tests attestation verification with region-specific rules
+func TestRegionalAttestationCompliance(t *testing.T) {
+	t.Run("Valid Region", func(t *testing.T) {
+		attestation := createTestAttestationWithAccumulator()
+		attestation.RegionID = "us-east"
+
+		mockRegistry := setupMockTEERegistry()
+		verifier := NewAttestationVerifier(mockRegistry)
+
+		result, err := verifier.Verify(attestation)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("Invalid Region", func(t *testing.T) {
+		attestation := createTestAttestationWithAccumulator()
+		attestation.RegionID = "restricted-region"
+
+		mockRegistry := setupMockTEERegistry()
+		verifier := NewAttestationVerifier(mockRegistry)
+
+		result, err := verifier.Verify(attestation)
+		assert.Error(t, err)
+		assert.False(t, result)
+		assert.Contains(t, err.Error(), "region not allowed")
+	})
+
+	t.Run("Region-specific Measurement Requirements", func(t *testing.T) {
+		attestation := createTestAttestationWithAccumulator()
+		attestation.RegionID = "eu-central"
+
+		// Create a specific measurement for EU region
+		euMeasurement := make([]byte, 32)
+		_, _ = rand.Read(euMeasurement)
+
+		mockRegistry := setupMockTEERegistry()
+		mockRegistry.AddRegionMeasurement("eu-central", euMeasurement)
+
+		// Test with incorrect measurement
+		attestation.Measurement = make([]byte, 32)
+		_, _ = rand.Read(attestation.Measurement)
+
+		verifier := NewAttestationVerifier(mockRegistry)
+		result, err := verifier.Verify(attestation)
+		assert.Error(t, err)
+		assert.False(t, result)
+		assert.Contains(t, err.Error(), "invalid measurement for region")
+
+		// Test with correct measurement
+		attestation.Measurement = euMeasurement
+		result, err = verifier.Verify(attestation)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+}
+
+// TestPerformanceOfAttestationVerification measures the performance of attestation verification
+func TestPerformanceOfAttestationVerification(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping performance test in short mode")
+	}
+
+	// Setup test environment with mock TEEs
+	mockRegistry := setupMockTEERegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create a batch of attestations
+	batchSize := 100
+	attestations := make([]*Attestation, batchSize)
+	for i := 0; i < batchSize; i++ {
+		attestations[i] = createTestAttestationWithAccumulator()
+	}
+
+	// Measure verification time
+	start := time.Now()
+	for i := 0; i < batchSize; i++ {
+		result, err := verifier.VerifyWithAccumulator(attestations[i])
+		require.NoError(t, err)
+		require.True(t, result)
+	}
+	elapsed := time.Since(start)
+
+	// Calculate statistics
+	averageTime := elapsed / time.Duration(batchSize)
+	t.Logf("Verified %d attestations in %v", batchSize, elapsed)
+	t.Logf("Average verification time: %v per attestation", averageTime)
+
+	// Assert that verification meets performance target (sub-100ms)
+	assert.Less(t, averageTime, 100*time.Millisecond, "Verification time exceeds target of 100ms")
+}
+
+// TestCrossRegionAttestationVerification tests verification of attestations across regions
+func TestCrossRegionAttestationVerification(t *testing.T) {
+	// Setup test registry with multiple regions
+	mockRegistry := setupMultiRegionRegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create attestations from different regions
+	usEastAttestation := createTestAttestationWithAccumulator()
+	usEastAttestation.RegionID = "us-east"
+
+	euCentralAttestation := createTestAttestationWithAccumulator()
+	euCentralAttestation.RegionID = "eu-central"
+
+	// Verify cross-region attestations
+	result, err := verifier.Verify(usEastAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	result, err = verifier.Verify(euCentralAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	// Test cross-region verification with region-specific policies
+	mockRegistry.SetRegionalPolicy("eu-central", "required-dual-attestation", true)
+
+	// Single attestation should fail in a region requiring dual attestation
+	singleAttestation := createTestSGXAttestation()
+	singleAttestation.RegionID = "eu-central"
+	result, err = verifier.Verify(singleAttestation)
+	assert.Error(t, err)
+	assert.False(t, result)
+	assert.Contains(t, err.Error(), "dual attestation required")
+
+	// Dual attestation should pass
+	dualAttestation := createTestDualAttestation()
+	dualAttestation.RegionID = "eu-central"
+	result, err = verifier.Verify(dualAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+}
+
+// TestDCAPBootstrapThenMesh tests the hybrid DCAP + mesh verification approach
+func TestDCAPBootstrapThenMesh(t *testing.T) {
+	// Setup registry with DCAP support
+	mockRegistry := setupMockTEERegistry()
+	mockRegistry.EnableDCAPSupport(true)
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Test DCAP bootstrap attestation (first attestation from a TEE)
+	dcapAttestation := createTestDCAPAttestation()
+	result, err := verifier.VerifyDCAPBootstrap(dcapAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	// Register the TEE in the accumulator
+	mockRegistry.RegisterTEEInAccumulator(dcapAttestation.EnclaveID, dcapAttestation.Measurement)
+
+	// Test subsequent mesh verification (using accumulator)
+	meshAttestation := createTestAttestationWithAccumulator()
+	meshAttestation.EnclaveID = dcapAttestation.EnclaveID
+	meshAttestation.Measurement = dcapAttestation.Measurement
+
+	result, err = verifier.VerifyWithAccumulator(meshAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	// Test with unregistered TEE (should fail mesh verification)
+	newTEEAttestation := createTestAttestationWithAccumulator()
+	unknownID := make([]byte, 32)
+	_, _ = rand.Read(unknownID)
+	newTEEAttestation.EnclaveID = unknownID
+
+	result, err = verifier.VerifyWithAccumulator(newTEEAttestation)
+	assert.False(t, result)
+}
+
+// TEERegistry interface defines methods required for TEE verification
+type TEERegistry interface {
+	IsRegionAllowed(regionID string) bool
+	VerifyMeasurement(enclaveID, measurement []byte, regionID string) bool
+	IsTEERegistered(enclaveID []byte) bool
+	CheckRegionalPolicy(regionID, policyName string) (interface{}, bool)
+	IsDCAPSupported() bool
+}
+
+// Helper functions to create test attestations
+
+func setupMockTEERegistry() *MockTEERegistry {
+	mockRegistry := &MockTEERegistry{
+		allowedRegions:            []string{"us-west", "us-east", "eu-central"},
+		regionMeasurements:        make(map[string][]byte),
+		teeIDs:                    make(map[string][]byte),
+		regionalPolicies:          make(map[string]map[string]interface{}),
+		dcapSupported:             true,
+		accumulatorTEEs:           make(map[string][]byte),
+		usedAttestations:          make(map[string]bool),
+		securityHeuristicsEnabled: true,
+		vulnerableMeasurements:    make(map[string]string),
+	}
+
+	// Set up default test TEE IDs
+	mockRegistry.RegisterTEE([]byte("tee-1"), []byte("default-measurement"))
+	mockRegistry.RegisterTEE([]byte("tee-2"), []byte("default-measurement"))
+
+	// Set up regional measurements
+	usWestMeasurement := make([]byte, 32)
+	_, _ = rand.Read(usWestMeasurement)
+	mockRegistry.AddRegionMeasurement("us-west", usWestMeasurement)
+
+	// Set up default region policies
+	policies := make(map[string]map[string]interface{})
+	policies["us-west"] = map[string]interface{}{
+		"requiredSignatures": 1,
+		"maxLatency":         2000, // 2 seconds
+		"crossRegionVerify":  false,
+	}
+	mockRegistry.regionalPolicies = policies
+
+	return mockRegistry
+}
+
+func setupMultiRegionRegistry() *MockTEERegistry {
+	registry := setupMockTEERegistry()
+
+	// Add region-specific measurements
+	usEastMeasurement := make([]byte, 32)
+	euCentralMeasurement := make([]byte, 32)
+	_, _ = rand.Read(usEastMeasurement)
+	_, _ = rand.Read(euCentralMeasurement)
+
+	registry.AddRegionMeasurement("us-east", usEastMeasurement)
+	registry.AddRegionMeasurement("eu-central", euCentralMeasurement)
+
+	return registry
+}
+
+func createTestSGXAttestation() *Attestation {
+	// Generate a random TxID
+	txID, _ := ids.FromString("f1d5e0a7b9c8d7e6f5a4b3c2d1e0f1a2b3c4d5e6f7a8b9c8d7e6f5a4b3c2d1e0")
+
+	// Generate random bytes for EnclaveID, Measurement, Signature, and Data
+	enclaveID := make([]byte, 32)
+	measurement := make([]byte, 32)
+	signature := make([]byte, 64)
+	data := make([]byte, 32)
+
+	_, _ = rand.Read(enclaveID)
+	_, _ = rand.Read(measurement)
+	_, _ = rand.Read(signature)
+	_, _ = rand.Read(data)
+
+	return &Attestation{
+		TxID:        txID,
+		Type:        SGXAttestation,
+		EnclaveID:   enclaveID,
+		RegionID:    "us-east",
+		Measurement: measurement,
+		Signature:   signature,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+}
+
+func createTestSEVAttestation() *Attestation {
+	attestation := createTestSGXAttestation()
+	attestation.Type = SEVAttestation
+	return attestation
+}
+
+func createTestDualAttestation() *Attestation {
+	attestation := createTestSGXAttestation()
+	attestation.Type = DualAttestation
+
+	// Generate a random cross-signature
+	crossSignature := make([]byte, 64)
+	_, _ = rand.Read(crossSignature)
+	attestation.CrossSignature = crossSignature
+
+	return attestation
+}
+
+func createTestDCAPAttestation() *Attestation {
+	attestation := createTestSGXAttestation()
+
+	// Add DCAP-specific fields that would be in a real implementation
+	// This is just a placeholder since the real structure would depend on your actual DCAP implementation
+	attestation.Data = append(attestation.Data, []byte("DCAP")...)
+
+	return attestation
+}
+
+func createTestAttestationWithAccumulator() *Attestation {
+	attestation := createTestSGXAttestation()
+
+	// Extract ID as bytes
+	txIDBytes := attestation.TxID[:]
+
+	// Generate hash from txID for accumulator calculation
+	hash := sha256.Sum256(txIDBytes)
+
+	// Create a valid accumulator value
+	currentAccumulator := updateAccumulator(hash[:])
+
+	// Use the same hash but different calculation for previous accumulator
+	prevAccumulatorHash := sha256.Sum256(append(hash[:], []byte("prev")...))
+	prevAccumulator := prevAccumulatorHash[:]
+
+	// Generate a valid witness
+	witness := computeWitness(prevAccumulator)
+
+	// Generate a sample state change
+	changedKeys := []string{"key1", "key2", "key3"}
+	changedValues := [][]byte{
+		[]byte("value1"),
+		[]byte("value2"),
+		[]byte("value3"),
+	}
+
+	// Create a valid state proof that will pass verification
+	stateProof := &StateTransitionProof{
+		Type:                AccumulatorProof,
+		AccumulatorValue:    currentAccumulator, // This will match what's expected in the verifier
+		PreviousAccumulator: prevAccumulator,
+		Witness:             witness,
+		ChangedKeys:         changedKeys,
+		ChangedValues:       changedValues,
+		TxHash:              txIDBytes,
+	}
+
+	// Create accumulator witness
+	accumulatorWitness := &AccumulatorWitness{
+		Value:           witness,
+		LastAccumulator: prevAccumulator,
+		Executor:        "executor-1",
+		Measurement:     attestation.Measurement,
+		EnclaveType:     "SGX",
+		Timestamp:       uint64(time.Now().Unix()),
+	}
+
+	attestation.StateProof = stateProof
+	attestation.Accumulator = accumulatorWitness
+
+	return attestation
+}
+
+func tamperAccumulatorProof(attestation *Attestation) *Attestation {
+	tampered := &Attestation{}
+	*tampered = *attestation
+
+	// Create a deep copy of the state proof
+	tampered.StateProof = &StateTransitionProof{}
+	*tampered.StateProof = *attestation.StateProof
+
+	// Tamper with the accumulator value
+	tamperedAccumulator := make([]byte, len(tampered.StateProof.AccumulatorValue))
+	copy(tamperedAccumulator, tampered.StateProof.AccumulatorValue)
+	tamperedAccumulator[0] ^= 0xFF // Flip some bits
+	tampered.StateProof.AccumulatorValue = tamperedAccumulator
+
+	return tampered
+}
+
+func TestAttestationVerification(t *testing.T) {
+	// Setup test environment with mock TEEs
+	mockRegistry := setupMockTEERegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create a test attestation
+	attestation := createTestSGXAttestation()
+
+	// Verify the attestation
+	result, err := verifier.Verify(attestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+}
+
+func TestAttestationVerificationWithAccumulator(t *testing.T) {
+	// Setup test environment with mock TEEs
+	mockRegistry := setupMockTEERegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create a test attestation with accumulator
+	attestation := createTestAttestationWithAccumulator()
+
+	// Verify the attestation with accumulator
+	result, err := verifier.VerifyWithAccumulator(attestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+}
+
+func TestAttestationVerificationWithTamperedAccumulator(t *testing.T) {
+	// Setup test environment with mock TEEs
+	mockRegistry := setupMockTEERegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create a test attestation with accumulator
+	attestation := createTestAttestationWithAccumulator()
+
+	// Tamper with the accumulator proof
+	tamperedAttestation := tamperAccumulatorProof(attestation)
+
+	// Verify the tampered attestation with accumulator
+	result, err := verifier.VerifyWithAccumulator(tamperedAttestation)
+	assert.Error(t, err)
+	assert.False(t, result)
+}
+
+// TestRegionalMeshAttestationVerification tests verification of attestations across a regional mesh network
+func TestRegionalMeshAttestationVerification(t *testing.T) {
+	// Setup test registry with multiple regions
+	mockRegistry := setupMultiRegionRegistry()
+	verifier := NewAttestationVerifier(mockRegistry)
+
+	// Create attestations from different regions
+	usEastAttestation := createTestSGXAttestation()
+	usEastAttestation.RegionID = "us-east"
+
+	euCentralAttestation := createTestSGXAttestation()
+	euCentralAttestation.RegionID = "eu-central"
+
+	// Verify cross-region attestations
+	result, err := verifier.Verify(usEastAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+
+	result, err = verifier.Verify(euCentralAttestation)
+	assert.NoError(t, err)
+	assert.True(t, result)
+}
+
+// MockTEERegistry is a mock implementation of a TEE registry for testing
+type MockTEERegistry struct {
+	allowedRegions            []string
+	regionMeasurements        map[string][]byte
+	teeIDs                    map[string][]byte
+	regionalPolicies          map[string]map[string]interface{}
+	dcapSupported             bool
+	accumulatorTEEs           map[string][]byte // For accumulator-based verification
+	usedAttestations          map[string]bool   // For replay attack protection
+	securityHeuristicsEnabled bool              // For security heuristics
+	vulnerableMeasurements    map[string]string // For vulnerable measurement database
+	timeserver                *SimpleTimeserver // For timeserver integration
+}
+
+// RegisterTEE registers a TEE in the registry
+func (m *MockTEERegistry) RegisterTEE(enclaveID, measurement []byte) {
+	// Convert binary enclaveID to string key
+	idStr := hex.EncodeToString(enclaveID)
+	if m.teeIDs == nil {
+		m.teeIDs = make(map[string][]byte)
+	}
+	m.teeIDs[idStr] = enclaveID
+
+	if m.accumulatorTEEs == nil {
+		m.accumulatorTEEs = make(map[string][]byte)
+	}
+	m.accumulatorTEEs[idStr] = measurement
+}
+
+// RegisterTEEInAccumulator registers a TEE in the accumulator-based registry
+func (m *MockTEERegistry) RegisterTEEInAccumulator(enclaveID, measurement []byte) {
+	// This is a specialized version of RegisterTEE for accumulator-based verification
+	m.RegisterTEE(enclaveID, measurement)
+}
+
+// AddRegionMeasurement adds a region-specific measurement requirement
+func (m *MockTEERegistry) AddRegionMeasurement(regionID string, measurement []byte) {
+	m.regionMeasurements[regionID] = measurement
+}
+
+// SetRegionalPolicy sets a specific policy for a region
+func (m *MockTEERegistry) SetRegionalPolicy(regionID, policyName string, value interface{}) {
+	if m.regionalPolicies[regionID] == nil {
+		m.regionalPolicies[regionID] = make(map[string]interface{})
+	}
+	m.regionalPolicies[regionID][policyName] = value
+}
+
+// EnableDCAPSupport enables DCAP support in the mock registry
+func (m *MockTEERegistry) EnableDCAPSupport(enabled bool) {
+	m.dcapSupported = enabled
+}
+
+// These methods are defined in attestation_security_test.go
+//
+// EnableReplayProtection enables replay attack protection in the mock registry
+// EnableSecurityHeuristics enables security heuristics in the mock registry
+// We don't need to redefine this method as it's already defined in the security test file
+
+// IsRegionAllowed checks if a region is allowed
+func (m *MockTEERegistry) IsRegionAllowed(regionID string) bool {
+	if m.allowedRegions == nil {
+		return true
+	}
+
+	for _, region := range m.allowedRegions {
+		if region == regionID {
+			return true
+		}
+	}
+
+	return false
+}
+
+// VerifyMeasurement verifies a TEE measurement
+func (m *MockTEERegistry) VerifyMeasurement(enclaveID, measurement []byte, regionID string) bool {
+	// Check if there's a region-specific measurement requirement
+	if expectedMeasurement, ok := m.regionMeasurements[regionID]; ok {
+		return bytes.Equal(measurement, expectedMeasurement)
+	}
+
+	// Also verify against accumulator-registered measurements
+	idStr := string(enclaveID)
+	if registeredMeasurement, ok := m.accumulatorTEEs[idStr]; ok {
+		return bytes.Equal(measurement, registeredMeasurement)
+	}
+
+	// If no specific requirements, consider any valid measurement acceptable
+	return len(measurement) == 32
+}
+
+// IsTEERegistered checks if a TEE is registered
+func (m *MockTEERegistry) IsTEERegistered(enclaveID []byte) bool {
+	idStr := string(enclaveID)
+	_, registered := m.accumulatorTEEs[idStr]
+
+	// For testing purposes, also consider any 32-byte ID as registered
+	return registered || len(enclaveID) == 32
+}
+
+// CheckRegionalPolicy checks a specific policy for a region
+func (m *MockTEERegistry) CheckRegionalPolicy(regionID, policyName string) (interface{}, bool) {
+	if m.regionalPolicies == nil {
+		return nil, false
+	}
+
+	regionPolicies, ok := m.regionalPolicies[regionID]
+	if !ok {
+		return nil, false
+	}
+
+	value, ok := regionPolicies[policyName]
+	return value, ok
+}
+
+// IsDCAPSupported checks if DCAP is supported
+func (m *MockTEERegistry) IsDCAPSupported() bool {
+	return m.dcapSupported
+}
+
+// SimpleTimeserver is a streamlined timeserver for basic tests
+type SimpleTimeserver struct {
+	currentTime time.Time
+	skew        time.Duration
+}
+
+// NewSimpleTimeserver creates a new simple timeserver
+func NewSimpleTimeserver() *SimpleTimeserver {
+	return &SimpleTimeserver{
+		currentTime: time.Now(),
+		skew:        0,
+	}
+}
+
+// GetTime returns the current time from the timeserver
+func (t *SimpleTimeserver) GetTime() time.Time {
+	return t.currentTime
+}
+
+// SetSkew sets the time skew for the timeserver
+func (t *SimpleTimeserver) SetSkew(skew time.Duration) {
+	t.skew = skew
+}
+
+// ValidateTimestamp validates a timestamp against the timeserver
+func (t *SimpleTimeserver) ValidateTimestamp(timestamp time.Time) bool {
+	diff := t.currentTime.Sub(timestamp)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= t.skew
+}
+
+// VerifyWithTimeserver verifies an attestation with timeserver token
+func (v *AttestationVerifier) VerifyWithTimeserver(attestation *Attestation) (bool, error) {
+	// Basic attestation verification
+	result, err := v.Verify(attestation)
+	if !result || err != nil {
+		return result, err
+	}
+
+	// Additional timeserver verification
+	if attestation.TimestampToken != nil && len(attestation.TimestampToken) > 0 {
+		// Verify timestamp token
+		// This is a simplified implementation
+	}
+
+	return true, nil
+}
+
+// updateAccumulator simulates updating the accumulator with new transaction data
+func updateAccumulator(txID []byte) []byte {
+	// Create a simulated previous accumulator value
+	accumulator := make([]byte, 32)
+	// In a real implementation, this would be a cryptographic function
+	// that updates the accumulator based on the transaction ID
+
+	// For simulation, we'll use a simple hash
+	hash := sha256.Sum256(txID)
+	copy(accumulator, hash[:])
+
+	return accumulator
+}
+
+// computeWitness simulates computing a witness for an accumulator value
+func computeWitness(accumulator []byte) []byte {
+	// Create a simulated witness
+	witness := make([]byte, 64)
+	// In a real implementation, this would compute a cryptographic witness
+	// for verifying state transitions
+
+	// For simulation, we'll use random bytes
+	_, _ = rand.Read(witness)
+
+	return witness
+}
+
+// VerifyMeasurement verifies a TEE measurement
+func (m *MockTEERegistry) VerifyMeasurement(enclaveID, measurement []byte, regionID string) bool {
+	// Check if there's a region-specific measurement requirement
+	if expectedMeasurement, ok := m.regionMeasurements[regionID]; ok {
+		return bytes.Equal(measurement, expectedMeasurement)
+	}
+
+	// Also verify against accumulator-registered measurements
+	idStr := string(enclaveID)
+	if registeredMeasurement, ok := m.accumulatorTEEs[idStr]; ok {
+		return bytes.Equal(measurement, registeredMeasurement)
+	}
+
+	// If no specific requirements, consider any valid measurement acceptable
+	return len(measurement) == 32
+}
+
+// IsTEERegistered checks if a TEE is registered
+func (m *MockTEERegistry) IsTEERegistered(enclaveID []byte) bool {
+	idStr := string(enclaveID)
+	_, registered := m.accumulatorTEEs[idStr]
+
+	// For testing purposes, also consider any 32-byte ID as registered
+	return registered || len(enclaveID) == 32
+}
+
+// CheckRegionalPolicy checks a specific policy for a region
+func (m *MockTEERegistry) CheckRegionalPolicy(regionID, policyName string) (interface{}, bool) {
+	if m.regionalPolicies == nil {
+		return nil, false
+	}
+
+	regionPolicies, ok := m.regionalPolicies[regionID]
+	if !ok {
+		return nil, false
+	}
+
+	value, ok := regionPolicies[policyName]
+	return value, ok
+}
+
+// IsDCAPSupported checks if DCAP is supported
+func (m *MockTEERegistry) IsDCAPSupported() bool {
+	return m.dcapSupported
+}
