@@ -69,6 +69,21 @@ type StateManager interface {
 	
 	// SetState stores the state for an object
 	SetState(objectID string, state []byte) error
+	
+	// CreateSnapshot creates a verifiable snapshot of an object's state
+	CreateSnapshot(objectID string, regionID string, teeID string, teeType string) (*StateSnapshot, error)
+	
+	// VerifySnapshot verifies a snapshot's integrity and authenticity
+	VerifySnapshot(snapshot *StateSnapshot) error
+	
+	// RestoreFromSnapshot restores an object's state from a snapshot
+	RestoreFromSnapshot(snapshot *StateSnapshot) error
+	
+	// ListSnapshots lists available snapshots for an object
+	ListSnapshots(objectID string) ([]*SnapshotChainInfo, error)
+	
+	// GetLatestSnapshot gets the latest snapshot for an object
+	GetLatestSnapshot(objectID string) (*StateSnapshot, error)
 }
 
 // DefaultStateManager is the default implementation of the StateManager interface
