@@ -1,0 +1,474 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location for all resources"
+            }
+        },
+        "prefix": {
+            "type": "string",
+            "defaultValue": "aristotee",
+            "metadata": {
+                "description": "Prefix for all resources"
+            }
+        },
+        "adminUsername": {
+            "type": "string",
+            "metadata": {
+                "description": "Admin username for VMs"
+            }
+        },
+        "adminPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Admin password for VMs"
+            }
+        },
+        "sgxVmSize": {
+            "type": "string",
+            "defaultValue": "Standard_DC2s_v2",
+            "allowedValues": [
+                "Standard_DC2s_v2",
+                "Standard_DC4s_v2",
+                "Standard_DC8_v2"
+            ],
+            "metadata": {
+                "description": "VM size for Intel SGX nodes (must support confidential computing)"
+            }
+        },
+        "sevVmSize": {
+            "type": "string",
+            "defaultValue": "Standard_NV4as_v4",
+            "allowedValues": [
+                "Standard_NV4as_v4",
+                "Standard_EC4ads_v5",
+                "Standard_EC8ads_v5"
+            ],
+            "metadata": {
+                "description": "VM size for AMD SEV nodes (must support AMD SEV)"
+            }
+        },
+        "numberOfTeePairs": {
+            "type": "int",
+            "defaultValue": 3,
+            "minValue": 1,
+            "maxValue": 10,
+            "metadata": {
+                "description": "Number of TEE pairs to deploy (each pair = 1 SGX + 1 SEV VM)"
+            }
+        },
+        "regions": {
+            "type": "array",
+            "defaultValue": [
+                "eastus",
+                "westeurope",
+                "southeastasia"
+            ],
+            "metadata": {
+                "description": "Regions to deploy TEE pairs, should match numberOfTeePairs or fewer"
+            }
+        }
+    },
+    "variables": {
+        "networkSecurityGroupName": "[concat(parameters('prefix'), '-nsg')]",
+        "virtualNetworkName": "[concat(parameters('prefix'), '-vnet')]",
+        "subnetName": "tee-subnet",
+        "storageAccountName": "[concat(toLower(parameters('prefix')), 'diag', uniqueString(resourceGroup().id))]",
+        "sgxVmNamePrefix": "[concat(parameters('prefix'), '-sgx')]",
+        "sevVmNamePrefix": "[concat(parameters('prefix'), '-sev')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2022-07-01",
+            "name": "[variables('networkSecurityGroupName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "SSH",
+                        "properties": {
+                            "priority": 1000,
+                            "protocol": "Tcp",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "*",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "*",
+                            "destinationPortRange": "22"
+                        }
+                    },
+                    {
+                        "name": "TEE-Mesh",
+                        "properties": {
+                            "priority": 1010,
+                            "protocol": "*",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "VirtualNetwork",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "VirtualNetwork",
+                            "destinationPortRange": "8000-8999"
+                        }
+                    },
+                    {
+                        "name": "NASDAQ-Simulator",
+                        "properties": {
+                            "priority": 1020,
+                            "protocol": "Tcp",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "*",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "*",
+                            "destinationPortRange": "9000-9999"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2022-07-01",
+            "name": "[variables('virtualNetworkName')]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+            ],
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "10.0.0.0/16"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "[variables('subnetName')]",
+                        "properties": {
+                            "addressPrefix": "10.0.0.0/24",
+                            "networkSecurityGroup": {
+                                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2022-09-01",
+            "name": "[variables('storageAccountName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "kind": "StorageV2",
+            "properties": {}
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2022-09-01",
+            "name": "[concat('TeePairDeployment-', copyIndex())]",
+            "copy": {
+                "name": "teePairsCopy",
+                "count": "[parameters('numberOfTeePairs')]"
+            },
+            "properties": {
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "inner"
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "location": { "type": "string" },
+                        "sgxVmNamePrefix": { "type": "string" },
+                        "sevVmNamePrefix": { "type": "string" },
+                        "pairIndex": { "type": "int" },
+                        "sgxVmSize": { "type": "string" },
+                        "sevVmSize": { "type": "string" },
+                        "adminUsername": { "type": "string" },
+                        "adminPassword": { "type": "securestring" },
+                        "virtualNetworkName": { "type": "string" },
+                        "subnetName": { "type": "string" },
+                        "storageAccountName": { "type": "string" }
+                    },
+                    "variables": {
+                        "sgxVmName": "[concat(parameters('sgxVmNamePrefix'), '-', parameters('pairIndex'))]",
+                        "sevVmName": "[concat(parameters('sevVmNamePrefix'), '-', parameters('pairIndex'))]",
+                        "sgxNicName": "[concat(variables('sgxVmName'), '-nic')]",
+                        "sevNicName": "[concat(variables('sevVmName'), '-nic')]",
+                        "sgxOsDiskName": "[concat(variables('sgxVmName'), '-osdisk')]",
+                        "sevOsDiskName": "[concat(variables('sevVmName'), '-osdisk')]",
+                        "sgxCustomData": "[base64('#cloud-config\npackage_update: true\npackage_upgrade: true\npackages:\n  - build-essential\n  - git\n  - python3-pip\n  - python3-dev\n  - libsgx-dcap-ql\n  - libsgx-dcap-default-qpl\n  - sgx-aesm-service\n  - libsgx-enclave-common\n  - libsgx-urts\n  - libsgx-uae-service\n  - docker.io\n  - docker-compose\nruncmd:\n  - sudo systemctl start docker\n  - sudo systemctl enable docker\n  - sudo usermod -aG docker ${LOCAL_USERNAME}\n  - git clone https://github.com/rhombus-tech/Aristo.git /home/${LOCAL_USERNAME}/aristo\n  - cd /home/${LOCAL_USERNAME}/aristo\n  - git checkout attestations\n  - chown -R ${LOCAL_USERNAME}:${LOCAL_USERNAME} /home/${LOCAL_USERNAME}/aristo\n  - echo \"export SGX_NODE_ID=$(hostname)\" >> /home/${LOCAL_USERNAME}/.bashrc\n  - echo \"export TEE_TYPE=SGX\" >> /home/${LOCAL_USERNAME}/.bashrc\n  - echo \"export TEE_PAIR_ID=pair-', parameters('pairIndex'), '\" >> /home/${LOCAL_USERNAME}/.bashrc\n')]",
+                        "sevCustomData": "[base64('#cloud-config\npackage_update: true\npackage_upgrade: true\npackages:\n  - build-essential\n  - git\n  - python3-pip\n  - python3-dev\n  - docker.io\n  - docker-compose\n  - amd-sev-snp-platform\nruncmd:\n  - sudo systemctl start docker\n  - sudo systemctl enable docker\n  - sudo usermod -aG docker ${LOCAL_USERNAME}\n  - git clone https://github.com/rhombus-tech/Aristo.git /home/${LOCAL_USERNAME}/aristo\n  - cd /home/${LOCAL_USERNAME}/aristo\n  - git checkout attestations\n  - chown -R ${LOCAL_USERNAME}:${LOCAL_USERNAME} /home/${LOCAL_USERNAME}/aristo\n  - echo \"export SEV_NODE_ID=$(hostname)\" >> /home/${LOCAL_USERNAME}/.bashrc\n  - echo \"export TEE_TYPE=SEV\" >> /home/${LOCAL_USERNAME}/.bashrc\n  - echo \"export TEE_PAIR_ID=pair-', parameters('pairIndex'), '\" >> /home/${LOCAL_USERNAME}/.bashrc\n')]"
+                    },
+                    "resources": [
+                        {
+                            "type": "Microsoft.Network/networkInterfaces",
+                            "apiVersion": "2022-07-01",
+                            "name": "[variables('sgxNicName')]",
+                            "location": "[parameters('location')]",
+                            "properties": {
+                                "ipConfigurations": [
+                                    {
+                                        "name": "ipconfig1",
+                                        "properties": {
+                                            "subnet": {
+                                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]"
+                                            },
+                                            "privateIPAllocationMethod": "Dynamic"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Network/networkInterfaces",
+                            "apiVersion": "2022-07-01",
+                            "name": "[variables('sevNicName')]",
+                            "location": "[parameters('location')]",
+                            "properties": {
+                                "ipConfigurations": [
+                                    {
+                                        "name": "ipconfig1",
+                                        "properties": {
+                                            "subnet": {
+                                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]"
+                                            },
+                                            "privateIPAllocationMethod": "Dynamic"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Compute/virtualMachines",
+                            "apiVersion": "2022-03-01",
+                            "name": "[variables('sgxVmName')]",
+                            "location": "[parameters('location')]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Network/networkInterfaces', variables('sgxNicName'))]"
+                            ],
+                            "properties": {
+                                "hardwareProfile": {
+                                    "vmSize": "[parameters('sgxVmSize')]"
+                                },
+                                "securityProfile": {
+                                    "securityType": "ConfidentialVM",
+                                    "uefiSettings": {
+                                        "secureBootEnabled": true,
+                                        "vTpmEnabled": true
+                                    }
+                                },
+                                "osProfile": {
+                                    "computerName": "[variables('sgxVmName')]",
+                                    "adminUsername": "[parameters('adminUsername')]",
+                                    "adminPassword": "[parameters('adminPassword')]",
+                                    "customData": "[variables('sgxCustomData')]",
+                                    "linuxConfiguration": {
+                                        "disablePasswordAuthentication": false
+                                    }
+                                },
+                                "storageProfile": {
+                                    "imageReference": {
+                                        "publisher": "Canonical",
+                                        "offer": "0001-com-ubuntu-confidential-vm-focal",
+                                        "sku": "20_04-lts-cvm",
+                                        "version": "latest"
+                                    },
+                                    "osDisk": {
+                                        "name": "[variables('sgxOsDiskName')]",
+                                        "caching": "ReadWrite",
+                                        "createOption": "FromImage",
+                                        "managedDisk": {
+                                            "storageAccountType": "Premium_LRS",
+                                            "securityProfile": {
+                                                "securityEncryptionType": "VMGuestStateOnly"
+                                            }
+                                        }
+                                    }
+                                },
+                                "networkProfile": {
+                                    "networkInterfaces": [
+                                        {
+                                            "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('sgxNicName'))]"
+                                        }
+                                    ]
+                                },
+                                "diagnosticsProfile": {
+                                    "bootDiagnostics": {
+                                        "enabled": true,
+                                        "storageUri": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2022-09-01').primaryEndpoints.blob]"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Compute/virtualMachines",
+                            "apiVersion": "2022-03-01",
+                            "name": "[variables('sevVmName')]",
+                            "location": "[parameters('location')]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Network/networkInterfaces', variables('sevNicName'))]"
+                            ],
+                            "properties": {
+                                "hardwareProfile": {
+                                    "vmSize": "[parameters('sevVmSize')]"
+                                },
+                                "securityProfile": {
+                                    "securityType": "ConfidentialVM",
+                                    "uefiSettings": {
+                                        "secureBootEnabled": true,
+                                        "vTpmEnabled": true
+                                    }
+                                },
+                                "osProfile": {
+                                    "computerName": "[variables('sevVmName')]",
+                                    "adminUsername": "[parameters('adminUsername')]",
+                                    "adminPassword": "[parameters('adminPassword')]",
+                                    "customData": "[variables('sevCustomData')]",
+                                    "linuxConfiguration": {
+                                        "disablePasswordAuthentication": false
+                                    }
+                                },
+                                "storageProfile": {
+                                    "imageReference": {
+                                        "publisher": "Canonical",
+                                        "offer": "0001-com-ubuntu-confidential-vm-focal",
+                                        "sku": "20_04-lts-cvm",
+                                        "version": "latest"
+                                    },
+                                    "osDisk": {
+                                        "name": "[variables('sevOsDiskName')]",
+                                        "caching": "ReadWrite",
+                                        "createOption": "FromImage",
+                                        "managedDisk": {
+                                            "storageAccountType": "Premium_LRS",
+                                            "securityProfile": {
+                                                "securityEncryptionType": "VMGuestStateOnly"
+                                            }
+                                        }
+                                    }
+                                },
+                                "networkProfile": {
+                                    "networkInterfaces": [
+                                        {
+                                            "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('sevNicName'))]"
+                                        }
+                                    ]
+                                },
+                                "diagnosticsProfile": {
+                                    "bootDiagnostics": {
+                                        "enabled": true,
+                                        "storageUri": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2022-09-01').primaryEndpoints.blob]"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Compute/virtualMachines/extensions",
+                            "apiVersion": "2022-03-01",
+                            "name": "[concat(variables('sgxVmName'), '/SetupTEE')]",
+                            "location": "[parameters('location')]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Compute/virtualMachines', variables('sgxVmName'))]"
+                            ],
+                            "properties": {
+                                "publisher": "Microsoft.Azure.Extensions",
+                                "type": "CustomScript",
+                                "typeHandlerVersion": "2.1",
+                                "autoUpgradeMinorVersion": true,
+                                "settings": {
+                                    "commandToExecute": "[concat('cd /home/', parameters('adminUsername'), '/aristo && sudo -u ', parameters('adminUsername'), ' ./tee/deployment/azure/setup_tee_node.sh SGX ', parameters('pairIndex'))]"
+                                }
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Compute/virtualMachines/extensions",
+                            "apiVersion": "2022-03-01",
+                            "name": "[concat(variables('sevVmName'), '/SetupTEE')]",
+                            "location": "[parameters('location')]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Compute/virtualMachines', variables('sevVmName'))]"
+                            ],
+                            "properties": {
+                                "publisher": "Microsoft.Azure.Extensions",
+                                "type": "CustomScript",
+                                "typeHandlerVersion": "2.1",
+                                "autoUpgradeMinorVersion": true,
+                                "settings": {
+                                    "commandToExecute": "[concat('cd /home/', parameters('adminUsername'), '/aristo && sudo -u ', parameters('adminUsername'), ' ./tee/deployment/azure/setup_tee_node.sh SEV ', parameters('pairIndex'))]"
+                                }
+                            }
+                        }
+                    ],
+                    "outputs": {
+                        "sgxVmId": {
+                            "type": "string",
+                            "value": "[resourceId('Microsoft.Compute/virtualMachines', variables('sgxVmName'))]"
+                        },
+                        "sevVmId": {
+                            "type": "string",
+                            "value": "[resourceId('Microsoft.Compute/virtualMachines', variables('sevVmName'))]"
+                        }
+                    }
+                },
+                "parameters": {
+                    "location": {
+                        "value": "[if(greater(length(parameters('regions')), copyIndex()), parameters('regions')[copyIndex()], parameters('location'))]"
+                    },
+                    "sgxVmNamePrefix": {
+                        "value": "[variables('sgxVmNamePrefix')]"
+                    },
+                    "sevVmNamePrefix": {
+                        "value": "[variables('sevVmNamePrefix')]"
+                    },
+                    "pairIndex": {
+                        "value": "[copyIndex()]"
+                    },
+                    "sgxVmSize": {
+                        "value": "[parameters('sgxVmSize')]"
+                    },
+                    "sevVmSize": {
+                        "value": "[parameters('sevVmSize')]"
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "adminPassword": {
+                        "value": "[parameters('adminPassword')]"
+                    },
+                    "virtualNetworkName": {
+                        "value": "[variables('virtualNetworkName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('subnetName')]"
+                    },
+                    "storageAccountName": {
+                        "value": "[variables('storageAccountName')]"
+                    }
+                }
+            }
+        }
+    ],
+    "outputs": {
+        "deployedTeePairs": {
+            "type": "int",
+            "value": "[parameters('numberOfTeePairs')]"
+        },
+        "sgxVmPrefix": {
+            "type": "string",
+            "value": "[variables('sgxVmNamePrefix')]"
+        },
+        "sevVmPrefix": {
+            "type": "string",
+            "value": "[variables('sevVmNamePrefix')]"
+        }
+    }
+}
