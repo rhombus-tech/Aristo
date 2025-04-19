@@ -30,11 +30,14 @@
         },
         "sgxVmSize": {
             "type": "string",
-            "defaultValue": "Standard_DC2s_v2",
+            "defaultValue": "Standard_DC2s_v3",
             "allowedValues": [
-                "Standard_DC2s_v2",
-                "Standard_DC4s_v2",
-                "Standard_DC8_v2"
+                "Standard_DC1s_v3",
+                "Standard_DC2s_v3",
+                "Standard_DC4s_v3",
+                "Standard_DC8s_v3",
+                "Standard_DC16s_v3",
+                "Standard_DC32s_v3"
             ],
             "metadata": {
                 "description": "VM size for Intel SGX nodes (must support confidential computing)"
@@ -42,11 +45,14 @@
         },
         "sevVmSize": {
             "type": "string",
-            "defaultValue": "Standard_NV4as_v4",
+            "defaultValue": "Standard_DC2as_v5",
             "allowedValues": [
-                "Standard_NV4as_v4",
-                "Standard_EC4ads_v5",
-                "Standard_EC8ads_v5"
+                "Standard_DC1as_v5",
+                "Standard_DC2as_v5",
+                "Standard_DC4as_v5",
+                "Standard_DC8as_v5",
+                "Standard_DC16as_v5",
+                "Standard_DC32as_v5"
             ],
             "metadata": {
                 "description": "VM size for AMD SEV nodes (must support AMD SEV)"
@@ -77,7 +83,7 @@
         "networkSecurityGroupName": "[concat(parameters('prefix'), '-nsg')]",
         "virtualNetworkName": "[concat(parameters('prefix'), '-vnet')]",
         "subnetName": "tee-subnet",
-        "storageAccountName": "[concat(toLower(parameters('prefix')), 'diag', uniqueString(resourceGroup().id))]",
+        "storageAccountName": "[concat(take(toLower(parameters('prefix')), 5), 'diag', take(uniqueString(resourceGroup().id), 9))]",
         "sgxVmNamePrefix": "[concat(parameters('prefix'), '-sgx')]",
         "sevVmNamePrefix": "[concat(parameters('prefix'), '-sev')]"
     },
@@ -173,6 +179,11 @@
             "type": "Microsoft.Resources/deployments",
             "apiVersion": "2022-09-01",
             "name": "[concat('TeePairDeployment-', copyIndex())]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+                "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+            ],
             "copy": {
                 "name": "teePairsCopy",
                 "count": "[parameters('numberOfTeePairs')]"
@@ -205,8 +216,20 @@
                         "sevNicName": "[concat(variables('sevVmName'), '-nic')]",
                         "sgxOsDiskName": "[concat(variables('sgxVmName'), '-osdisk')]",
                         "sevOsDiskName": "[concat(variables('sevVmName'), '-osdisk')]",
-                        "sgxCustomData": "[base64(concat('#cloud-config\npackage_update: true\npackage_upgrade: true\npackages:\n  - build-essential\n  - git\n  - python3-pip\n  - python3-dev\n  - libsgx-dcap-ql\n  - libsgx-dcap-default-qpl\n  - sgx-aesm-service\n  - libsgx-enclave-common\n  - libsgx-urts\n  - libsgx-uae-service\n  - docker.io\n  - docker-compose\nruncmd:\n  - sudo systemctl start docker\n  - sudo systemctl enable docker\n  - sudo usermod -aG docker ', parameters('adminUsername'), '\n  - git clone https://github.com/rhombus-tech/Aristo.git /home/', parameters('adminUsername'), '/aristo\n  - cd /home/', parameters('adminUsername'), '/aristo\n  - git checkout attestations\n  - chown -R ', parameters('adminUsername'), ':', parameters('adminUsername'), ' /home/', parameters('adminUsername'), '/aristo\n  - echo "export SGX_NODE_ID=$(hostname)" >> /home/', parameters('adminUsername'), '/.bashrc\n  - echo "export TEE_TYPE=SGX" >> /home/', parameters('adminUsername'), '/.bashrc\n  - echo "export TEE_PAIR_ID=pair-', parameters('pairIndex'), '" >> /home/', parameters('adminUsername'), '/.bashrc\n'))]",
-                        "sevCustomData": "[base64(concat('#cloud-config\npackage_update: true\npackage_upgrade: true\npackages:\n  - build-essential\n  - git\n  - python3-pip\n  - python3-dev\n  - docker.io\n  - docker-compose\n  - amd-sev-snp-platform\nruncmd:\n  - sudo systemctl start docker\n  - sudo systemctl enable docker\n  - sudo usermod -aG docker ', parameters('adminUsername'), '\n  - git clone https://github.com/rhombus-tech/Aristo.git /home/', parameters('adminUsername'), '/aristo\n  - cd /home/', parameters('adminUsername'), '/aristo\n  - git checkout attestations\n  - chown -R ', parameters('adminUsername'), ':', parameters('adminUsername'), ' /home/', parameters('adminUsername'), '/aristo\n  - echo "export SEV_NODE_ID=$(hostname)" >> /home/', parameters('adminUsername'), '/.bashrc\n  - echo "export TEE_TYPE=SEV" >> /home/', parameters('adminUsername'), '/.bashrc\n  - echo "export TEE_PAIR_ID=pair-', parameters('pairIndex'), '" >> /home/', parameters('adminUsername'), '/.bashrc\n'))]",
+                        "cloudInitSgxBase": "#cloud-config\npackage_update: true\npackage_upgrade: true\npackages:\n  - build-essential\n  - git\n  - python3-pip\n  - python3-dev\n  - libsgx-dcap-ql\n  - libsgx-dcap-default-qpl\n  - sgx-aesm-service\n  - libsgx-enclave-common\n  - libsgx-urts\n  - libsgx-uae-service\n  - docker.io\n  - docker-compose\nruncmd:\n  - sudo systemctl start docker\n  - sudo systemctl enable docker\n  - sudo usermod -aG docker ",
+                        "cloudInitSevBase": "#cloud-config\npackage_update: true\npackage_upgrade: true\npackages:\n  - build-essential\n  - git\n  - python3-pip\n  - python3-dev\n  - docker.io\n  - docker-compose\n  - amd-sev-snp-platform\nruncmd:\n  - sudo systemctl start docker\n  - sudo systemctl enable docker\n  - sudo usermod -aG docker ",
+                        "cloudInitMiddle": "\n  - git clone https://github.com/rhombus-tech/Aristo.git /home/",
+                        "cloudInitSgxEnd": "/aristo\n  - cd /home/",
+                        "cloudInitUser2": "/aristo\n  - git checkout cloud-testing\n  - chown -R ",
+                        "cloudInitUser3": ":",
+                        "cloudInitSgxFinal": " /home/",
+                        "cloudInitSgxEnv": "/aristo\n  - echo \"export SGX_NODE_ID=$(hostname)\" >> /home/",
+                        "cloudInitSgxEnv2": "/.bashrc\n  - echo \"export TEE_TYPE=SGX\" >> /home/",
+                        "cloudInitPairId": "/.bashrc\n  - echo \"export TEE_PAIR_ID=pair-",
+                        "cloudInitFinalEnd": "\" >> /home/",
+                        "cloudInitLastBit": "/.bashrc\n",
+                        "cloudInitSevEnv": "/aristo\n  - echo \"export SEV_NODE_ID=$(hostname)\" >> /home/",
+                        "cloudInitSevEnv2": "/.bashrc\n  - echo \"export TEE_TYPE=SEV\" >> /home/"
                     },
                     "resources": [
                         {
@@ -220,7 +243,7 @@
                                         "name": "ipconfig1",
                                         "properties": {
                                             "subnet": {
-                                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]"
+                                                "id": "[concat(subscription().id, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', parameters('virtualNetworkName'), '/subnets/', parameters('subnetName'))]"
                                             },
                                             "privateIPAllocationMethod": "Dynamic"
                                         }
@@ -239,7 +262,7 @@
                                         "name": "ipconfig1",
                                         "properties": {
                                             "subnet": {
-                                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]"
+                                                "id": "[concat(subscription().id, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', parameters('virtualNetworkName'), '/subnets/', parameters('subnetName'))]"
                                             },
                                             "privateIPAllocationMethod": "Dynamic"
                                         }
@@ -270,7 +293,7 @@
                                     "computerName": "[variables('sgxVmName')]",
                                     "adminUsername": "[parameters('adminUsername')]",
                                     "adminPassword": "[parameters('adminPassword')]",
-                                    "customData": "[variables('sgxCustomData')]",
+                                    "customData": "[base64(concat(variables('cloudInitSgxBase'), parameters('adminUsername'), variables('cloudInitMiddle'), parameters('adminUsername'), variables('cloudInitSgxEnd'), parameters('adminUsername'), variables('cloudInitUser2'), parameters('adminUsername'), variables('cloudInitUser3'), parameters('adminUsername'), variables('cloudInitSgxFinal'), parameters('adminUsername'), variables('cloudInitSgxEnv'), parameters('adminUsername'), variables('cloudInitSgxEnv2'), parameters('adminUsername'), variables('cloudInitPairId'), parameters('pairIndex'), variables('cloudInitFinalEnd'), parameters('adminUsername'), variables('cloudInitLastBit')))]",
                                     "linuxConfiguration": {
                                         "disablePasswordAuthentication": false
                                     }
@@ -287,10 +310,7 @@
                                         "caching": "ReadWrite",
                                         "createOption": "FromImage",
                                         "managedDisk": {
-                                            "storageAccountType": "Premium_LRS",
-                                            "securityProfile": {
-                                                "securityEncryptionType": "VMGuestStateOnly"
-                                            }
+                                            "storageAccountType": "Premium_LRS"
                                         }
                                     }
                                 },
@@ -332,7 +352,7 @@
                                     "computerName": "[variables('sevVmName')]",
                                     "adminUsername": "[parameters('adminUsername')]",
                                     "adminPassword": "[parameters('adminPassword')]",
-                                    "customData": "[variables('sevCustomData')]",
+                                    "customData": "[base64(concat(variables('cloudInitSevBase'), parameters('adminUsername'), variables('cloudInitMiddle'), parameters('adminUsername'), variables('cloudInitSgxEnd'), parameters('adminUsername'), variables('cloudInitUser2'), parameters('adminUsername'), variables('cloudInitUser3'), parameters('adminUsername'), variables('cloudInitSgxFinal'), parameters('adminUsername'), variables('cloudInitSevEnv'), parameters('adminUsername'), variables('cloudInitSevEnv2'), parameters('adminUsername'), variables('cloudInitPairId'), parameters('pairIndex'), variables('cloudInitFinalEnd'), parameters('adminUsername'), variables('cloudInitLastBit')))]",
                                     "linuxConfiguration": {
                                         "disablePasswordAuthentication": false
                                     }
@@ -349,10 +369,7 @@
                                         "caching": "ReadWrite",
                                         "createOption": "FromImage",
                                         "managedDisk": {
-                                            "storageAccountType": "Premium_LRS",
-                                            "securityProfile": {
-                                                "securityEncryptionType": "VMGuestStateOnly"
-                                            }
+                                            "storageAccountType": "Premium_LRS"
                                         }
                                     }
                                 },

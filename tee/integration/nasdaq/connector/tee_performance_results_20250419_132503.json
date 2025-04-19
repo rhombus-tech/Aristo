@@ -1,0 +1,25 @@
+{
+  "total_time": 0.257066011428833,
+  "total_messages": 20000,
+  "overall_tps": 77801.02818274312,
+  "length_prefixed_tps": 76413.4553722381,
+  "direct_tps": 79688.41314896512,
+  "stats": {
+    "messages_processed": 20000,
+    "messages_per_node": {},
+    "parameters_validated": 0,
+    "attestations_verified": 0,
+    "format_type_counts": {
+      "length-prefixed": 10000,
+      "direct": 10000
+    },
+    "processing_time_ms": 0,
+    "verification_time_ms": 0,
+    "throughput": 79688.41314896512
+  },
+  "node_distribution": {
+    "i-00e38fb76e0e77bb6": 5000,
+    "i-011c91b6513c9a499": 5000
+  },
+  "timestamp": "2025-04-19T17:25:01Z"
+}

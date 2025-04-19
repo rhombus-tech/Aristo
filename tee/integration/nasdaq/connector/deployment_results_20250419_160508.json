@@ -1,0 +1,33 @@
+{
+  "sgx_deployments": [
+    {
+      "success": true,
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "node_id": "i-00e38fb76e0e77bb6",
+      "node_type": "SGX"
+    },
+    {
+      "success": true,
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "node_id": "sgx-node-1",
+      "node_type": "SGX"
+    }
+  ],
+  "sev_deployments": [
+    {
+      "success": true,
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "node_id": "i-011c91b6513c9a499",
+      "node_type": "SEV"
+    },
+    {
+      "success": true,
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "node_id": "sev-node-1",
+      "node_type": "SEV"
+    }
+  ],
+  "success_count": 4,
+  "failure_count": 0,
+  "contract_id": "748775a3a2076c1ae990e94755e63bcb"
+}

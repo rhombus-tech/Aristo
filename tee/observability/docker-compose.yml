@@ -1,0 +1,36 @@
+version: '3'
+services:
+  tee-prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"
+    networks:
+      - tee-network
+    restart: unless-stopped
+    container_name: tee-prometheus
+
+  tee-grafana:
+    image: grafana/grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_DASHBOARDS_MIN_REFRESH_INTERVAL=1s
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    ports:
+      - "3001:3000"  # Using port 3001 to avoid conflict with existing Grafana
+    volumes:
+      - ./dashboards:/var/lib/grafana/dashboards
+      - ./provisioning:/etc/grafana/provisioning
+    networks:
+      - tee-network
+    depends_on:
+      - tee-prometheus
+    restart: unless-stopped
+    container_name: tee-grafana
+
+networks:
+  tee-network:
+    name: tee-network

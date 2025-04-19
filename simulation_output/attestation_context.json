@@ -1,0 +1,7 @@
+{
+    "primary_tee_id": "sgx-d94d6",
+    "secondary_tee_id": "sev-d94d6",
+    "region_id": "us-east-1",
+    "accumulator_version": 1,
+    "attestation_type": "CROSS_TEE"
+}

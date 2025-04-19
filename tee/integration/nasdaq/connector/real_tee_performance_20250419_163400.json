@@ -1,0 +1,33 @@
+{
+  "error": "No TEE nodes available",
+  "node_status": [
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ec2-user@3.88.167.91: Permission denied (publickey).\n"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ec2-user@3.93.178.107: Permission denied (publickey).\n"
+    },
+    {
+      "node_id": "sgx-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.82.138.122 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "sev-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 44.203.182.22 port 22: Operation timed out\n"
+    }
+  ]
+}

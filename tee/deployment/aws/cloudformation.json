@@ -1,0 +1,381 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dual TEE Architecture with Intel SGX and AMD SEV for Cross-Attestation",
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "Must be the name of an existing EC2 KeyPair."
+    },
+    "SGXInstanceType": {
+      "Description": "Instance type for Intel SGX nodes",
+      "Type": "String",
+      "Default": "c5a.xlarge",
+      "AllowedValues": ["c5a.xlarge", "c5a.2xlarge", "c5a.4xlarge"],
+      "ConstraintDescription": "Must be a valid EC2 instance type with SGX support."
+    },
+    "SEVInstanceType": {
+      "Description": "Instance type for AMD SEV nodes",
+      "Type": "String",
+      "Default": "c6a.2xlarge",
+      "AllowedValues": ["c6a.large", "c6a.xlarge", "c6a.2xlarge", "c6a.4xlarge", "c6a.8xlarge"],
+      "ConstraintDescription": "Must be a valid EC2 instance type with AMD SEV-SNP support."
+    },
+    "VpcId": {
+      "Description": "VPC ID for deployment",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "SubnetId": {
+      "Description": "Subnet ID for deployment, should be in the same region as NASDAQ Kafka",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "SGXNodeCount": {
+      "Description": "Number of Intel SGX nodes to deploy",
+      "Type": "Number",
+      "Default": 2,
+      "MinValue": 1,
+      "MaxValue": 10
+    },
+    "SEVNodeCount": {
+      "Description": "Number of AMD SEV nodes to deploy",
+      "Type": "Number",
+      "Default": 2,
+      "MinValue": 1,
+      "MaxValue": 10
+    }
+  },
+  "Resources": {
+    "TEESecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for TEE nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 8080,
+            "ToPort": 8080,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "SGXNodeLaunchTemplate": {
+      "Type": "AWS::EC2::LaunchTemplate",
+      "Properties": {
+        "LaunchTemplateName": {"Fn::Sub": "${AWS::StackName}-sgx-launch-template"},
+        "VersionDescription": "Launch template for Intel SGX nodes",
+        "LaunchTemplateData": {
+          "ImageId": "ami-030f04819b19327fc",
+          "InstanceType": {"Ref": "SGXInstanceType"},
+          "KeyName": {"Ref": "KeyName"},
+          "SecurityGroupIds": [{"Ref": "TEESecurityGroup"}],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Join": ["", [
+                "#!/bin/bash -xe\n",
+                "# Install required packages\n",
+                "apt-get update -y\n",
+                "apt-get install -y build-essential git cmake libssl-dev curl\n",
+                "\n",
+                "# Set up Intel SGX\n",
+                "mkdir -p /opt/intel\n",
+                "cd /opt/intel\n",
+                "wget https://download.01.org/intel-sgx/sgx-linux/2.14/distro/ubuntu20.04-server/sgx_linux_x64_sdk_2.14.100.2.bin\n",
+                "chmod +x sgx_linux_x64_sdk_2.14.100.2.bin\n",
+                "echo -e 'no\\n/opt/intel' | ./sgx_linux_x64_sdk_2.14.100.2.bin\n",
+                "source /opt/intel/sgxsdk/environment\n",
+                "\n",
+                "# Clone project repository\n",
+                "mkdir -p /opt/rhombus\n",
+                "cd /opt/rhombus\n",
+                "git clone https://github.com/rhombus-tech/tee-integration.git\n",
+                "cd tee-integration\n",
+                "\n",
+                "# Configure TEE node\n",
+                "export TEE_TYPE=\"SGX\"\n",
+                "export TEE_ID=\"sgx-$(hostname | cut -d'-' -f2)\"\n",
+                "export REGION_ID=\"us-east-1\"\n",
+                "\n",
+                "# Set up parameter validation for WebAssembly\n",
+                "mkdir -p /opt/rhombus/param-validation\n",
+                "cat > /opt/rhombus/param-validation/config.json << 'EOF'\n",
+                "{\n",
+                "  \"validation\": {\n",
+                "    \"length_prefixed\": true,\n",
+                "    \"direct_format\": true,\n",
+                "    \"max_param_size\": 1024,\n",
+                "    \"format_detection\": true\n",
+                "  },\n",
+                "  \"cross_attestation\": {\n",
+                "    \"enabled\": true,\n",
+                "    \"partner_type\": \"SEV\",\n",
+                "    \"verification_ms_target\": 100\n",
+                "  }\n",
+                "}\n",
+                "EOF\n",
+                "\n",
+                "# NASDAQ Connector Setup\n",
+                "export NODE_TYPE=\"CONNECTOR\"\n",
+                "export NODE_ID=\"nasdaq-connector\"\n",
+                "export REGION_ID=\"us-east-1\"\n",
+                "\n",
+                "# Get instance metadata\n",
+                "PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n",
+                "\n",
+                "# Create configuration for TEE communication\n",
+                "mkdir -p /opt/rhombus/mesh\n",
+                "cat > /opt/rhombus/mesh/connector_info.json << EOF\n",
+                "{\n",
+                "  \"connector_type\": \"NASDAQ\",\n",
+                "  \"connector_ip\": \"$PRIVATE_IP\",\n",
+                "  \"connector_port\": 9092,\n",
+                "  \"region\": \"us-east-1\"\n",
+                "}\n",
+                "EOF\n",
+                "\n",
+                "# Start TEE services\n",
+                "cd /opt/rhombus/tee-integration\n",
+                "./setup.sh\n"
+              ]]
+            }
+          }
+        }
+      }
+    },
+    "SEVNodeLaunchTemplate": {
+      "Type": "AWS::EC2::LaunchTemplate",
+      "Properties": {
+        "LaunchTemplateName": {"Fn::Sub": "${AWS::StackName}-sev-launch-template"},
+        "VersionDescription": "Launch template for AMD SEV nodes",
+        "LaunchTemplateData": {
+          "ImageId": "ami-030f04819b19327fc",
+          "InstanceType": {"Ref": "SEVInstanceType"},
+          "KeyName": {"Ref": "KeyName"},
+          "SecurityGroupIds": [{"Ref": "TEESecurityGroup"}],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Join": ["", [
+                "#!/bin/bash -xe\n",
+                "# Install required packages\n",
+                "apt-get update -y\n",
+                "apt-get install -y build-essential git cmake libssl-dev curl\n",
+                "\n",
+                "# Set up AMD SEV\n",
+                "mkdir -p /opt/amd\n",
+                "cd /opt/amd\n",
+                "git clone https://github.com/AMDESE/sev-tool.git\n",
+                "cd sev-tool\n",
+                "make\n",
+                "make install\n",
+                "\n",
+                "# Clone project repository\n",
+                "mkdir -p /opt/rhombus\n",
+                "cd /opt/rhombus\n",
+                "git clone https://github.com/rhombus-tech/tee-integration.git\n",
+                "cd tee-integration\n",
+                "\n",
+                "# Configure TEE node\n",
+                "export TEE_TYPE=\"SEV\"\n",
+                "export TEE_ID=\"sev-$(hostname | cut -d'-' -f2)\"\n",
+                "export REGION_ID=\"us-east-1\"\n",
+                "\n",
+                "# Set up parameter validation for WebAssembly\n",
+                "mkdir -p /opt/rhombus/param-validation\n",
+                "cat > /opt/rhombus/param-validation/config.json << 'EOF'\n",
+                "{\n",
+                "  \"validation\": {\n",
+                "    \"length_prefixed\": true,\n",
+                "    \"direct_format\": true,\n",
+                "    \"max_param_size\": 1024,\n",
+                "    \"format_detection\": true\n",
+                "  },\n",
+                "  \"cross_attestation\": {\n",
+                "    \"enabled\": true,\n",
+                "    \"partner_type\": \"SGX\",\n",
+                "    \"verification_ms_target\": 100\n",
+                "  }\n",
+                "}\n",
+                "EOF\n",
+                "\n",
+                "# Start TEE services\n",
+                "cd /opt/rhombus/tee-integration\n",
+                "./setup.sh\n"
+              ]]
+            }
+          }
+        }
+      }
+    },
+    "SGXNodeGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AutoScalingGroupName": {"Fn::Sub": "${AWS::StackName}-sgx-nodes"},
+        "LaunchTemplate": {
+          "LaunchTemplateId": {"Ref": "SGXNodeLaunchTemplate"},
+          "Version": {"Fn::GetAtt": ["SGXNodeLaunchTemplate", "LatestVersionNumber"]}
+        },
+        "MinSize": {"Ref": "SGXNodeCount"},
+        "MaxSize": {"Ref": "SGXNodeCount"},
+        "DesiredCapacity": {"Ref": "SGXNodeCount"},
+        "VPCZoneIdentifier": [{"Ref": "SubnetId"}],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {"Fn::Sub": "${AWS::StackName}-sgx-node"},
+            "PropagateAtLaunch": true
+          },
+          {
+            "Key": "TEEType",
+            "Value": "SGX",
+            "PropagateAtLaunch": true
+          }
+        ]
+      }
+    },
+    "SEVNodeGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AutoScalingGroupName": {"Fn::Sub": "${AWS::StackName}-sev-nodes"},
+        "LaunchTemplate": {
+          "LaunchTemplateId": {"Ref": "SEVNodeLaunchTemplate"},
+          "Version": {"Fn::GetAtt": ["SEVNodeLaunchTemplate", "LatestVersionNumber"]}
+        },
+        "MinSize": {"Ref": "SEVNodeCount"},
+        "MaxSize": {"Ref": "SEVNodeCount"},
+        "DesiredCapacity": {"Ref": "SEVNodeCount"},
+        "VPCZoneIdentifier": [{"Ref": "SubnetId"}],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {"Fn::Sub": "${AWS::StackName}-sev-node"},
+            "PropagateAtLaunch": true
+          },
+          {
+            "Key": "TEEType",
+            "Value": "SEV",
+            "PropagateAtLaunch": true
+          }
+        ]
+      }
+    },
+    "NASDAQConnectorSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for NASDAQ Kafka connector",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 9092,
+            "ToPort": 9092,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "NASDAQConnector": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": "c5.large",
+        "ImageId": "ami-0c7217cdde317cfec",
+        "KeyName": {"Ref": "KeyName"},
+        "SubnetId": {"Ref": "SubnetId"},
+        "SecurityGroupIds": [{"Ref": "NASDAQConnectorSecurityGroup"}],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash -xe\n",
+              "# Install Kafka client\n",
+              "apt-get update -y\n",
+              "apt-get install -y openjdk-11-jdk\n",
+              "mkdir -p /opt/kafka\n",
+              "cd /opt/kafka\n",
+              "wget https://downloads.apache.org/kafka/3.2.3/kafka_2.13-3.2.3.tgz\n",
+              "tar -xzf kafka_2.13-3.2.3.tgz\n",
+              "cd kafka_2.13-3.2.3\n",
+              "\n",
+              "# Set up NASDAQ Kafka connector\n",
+              "cat > /opt/kafka/kafka_2.13-3.2.3/config/nasdaq-connector.properties << 'EOF'\n",
+              "bootstrap.servers=NASDAQ_KAFKA_ENDPOINT:9092\n",
+              "key.converter=org.apache.kafka.connect.storage.StringConverter\n",
+              "value.converter=org.apache.kafka.connect.storage.StringConverter\n",
+              "tasks.max=1\n",
+              "EOF\n",
+              "\n",
+              "# Set up NASDAQ ITCH converter\n",
+              "mkdir -p /opt/rhombus/itch\n",
+              "cd /opt/rhombus/itch\n",
+              "git clone https://github.com/rhombus-tech/nasdaq-itch.git\n",
+              "cd nasdaq-itch\n",
+              "pip install -r requirements.txt\n",
+              "\n",
+              "# Start market data processing service\n",
+              "cat > /etc/systemd/system/market-data.service << 'EOF'\n",
+              "[Unit]\n",
+              "Description=NASDAQ Market Data Processing\n",
+              "After=network.target\n",
+              "\n",
+              "[Service]\n",
+              "Type=simple\n",
+              "User=root\n",
+              "WorkingDirectory=/opt/rhombus/itch/nasdaq-itch\n",
+              "ExecStart=/usr/bin/python3 itch_processor.py\n",
+              "Restart=on-failure\n",
+              "\n",
+              "[Install]\n",
+              "WantedBy=multi-user.target\n",
+              "EOF\n",
+              "\n",
+              "systemctl daemon-reload\n",
+              "systemctl enable market-data\n",
+              "systemctl start market-data\n"
+            ]]
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {"Fn::Sub": "${AWS::StackName}-nasdaq-connector"}
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "SGXNodeGroupName": {
+      "Description": "Auto Scaling Group Name for Intel SGX Nodes",
+      "Value": {"Ref": "SGXNodeGroup"}
+    },
+    "SEVNodeGroupName": {
+      "Description": "Auto Scaling Group Name for AMD SEV Nodes",
+      "Value": {"Ref": "SEVNodeGroup"}
+    },
+    "NASDAQConnectorId": {
+      "Description": "Instance ID of the NASDAQ Kafka Connector",
+      "Value": {"Ref": "NASDAQConnector"}
+    },
+    "NASDAQConnectorIP": {
+      "Description": "Private IP of the NASDAQ Kafka Connector",
+      "Value": {"Fn::GetAtt": ["NASDAQConnector", "PrivateIp"]}
+    }
+  }
+}

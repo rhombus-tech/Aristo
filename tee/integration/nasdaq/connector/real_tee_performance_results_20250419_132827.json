@@ -1,0 +1,84 @@
+{
+  "total_time": 14.622294187545776,
+  "total_messages": 4000,
+  "overall_tps": 273.55488466419405,
+  "length_prefixed_tps": 18106.563693229524,
+  "direct_tps": 137.82131887052608,
+  "attestation_count": 2,
+  "attestation_percentage": 0.05,
+  "batch_size": 1300,
+  "message_size": 630,
+  "node_statuses": [
+    {
+      "id": "i-00e38fb76e0e77bb6",
+      "type": "SGX",
+      "ip": "3.88.167.91",
+      "status": "online",
+      "api_available": true,
+      "api_response": {
+        "api_port": 8080,
+        "cross_attestation": true,
+        "last_updated": "2025-04-19T17:16:13Z",
+        "node_id": "i-00e38fb76e0e77bb6",
+        "node_type": "sgx-node",
+        "parameter_capability": {
+          "direct_format": true,
+          "format_detection": true,
+          "length_prefixed": true,
+          "max_size": 1024
+        },
+        "port": 7070,
+        "private_ip": "172.31.31.67",
+        "public_ip": "3.88.167.91",
+        "region": "us-east-1",
+        "service_status": "running",
+        "status": "active",
+        "timestamp": "2025-04-19T17:27:56Z"
+      }
+    },
+    {
+      "id": "i-011c91b6513c9a499",
+      "type": "SEV",
+      "ip": "3.93.178.107",
+      "status": "online",
+      "api_available": true,
+      "api_response": {
+        "api_port": 8080,
+        "cross_attestation": true,
+        "last_updated": "2025-04-19T17:17:28Z",
+        "node_id": "i-011c91b6513c9a499",
+        "node_type": "SEV",
+        "parameter_capability": {
+          "direct_format": true,
+          "format_detection": true,
+          "length_prefixed": true,
+          "max_size": 1024
+        },
+        "port": 7070,
+        "private_ip": "172.31.19.59",
+        "public_ip": "3.93.178.107",
+        "region": "us-east-1",
+        "service_status": "running",
+        "status": "active",
+        "timestamp": "2025-04-19T17:27:56Z"
+      }
+    }
+  ],
+  "stats": {
+    "messages_processed": 8000,
+    "messages_per_node": {
+      "i-00e38fb76e0e77bb6": 2000,
+      "i-011c91b6513c9a499": 2000
+    },
+    "parameters_validated": 4000,
+    "attestations_verified": 4,
+    "format_type_counts": {
+      "length-prefixed": 2000,
+      "direct": 2000
+    },
+    "processing_time_ms": 57136.606216430664,
+    "verification_time_ms": 57130.49626350403,
+    "throughput": 137.82131887052608
+  },
+  "timestamp": "2025-04-19T17:28:11Z"
+}

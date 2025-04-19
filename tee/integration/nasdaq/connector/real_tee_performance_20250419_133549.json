@@ -1,0 +1,17 @@
+{
+  "error": "No TEE nodes available",
+  "node_status": [
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "unavailable",
+      "reason": "enarx_not_found",
+      "stderr": "ec2-user@3.88.167.91: Permission denied (publickey).\n"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "unavailable",
+      "reason": "enarx_not_found",
+      "stderr": "ec2-user@3.93.178.107: Permission denied (publickey).\n"
+    }
+  ]
+}

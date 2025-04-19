@@ -1,0 +1,321 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Multiple TEE Pairs with Intel SGX and AMD SEV Cross-Attestation for High TPS",
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "Must be the name of an existing EC2 KeyPair."
+    },
+    "SubnetId": {
+      "Description": "Subnet ID for deployment",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "VpcId": {
+      "Description": "VPC ID for security groups",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "PairCount": {
+      "Description": "Number of TEE pairs to deploy (1-5)",
+      "Type": "Number",
+      "Default": 3,
+      "MinValue": 1,
+      "MaxValue": 5
+    }
+  },
+  "Conditions": {
+    "CreatePair1": {"Fn::Or": [{"Fn::Equals": [{"Ref": "PairCount"}, 1]}, {"Fn::Equals": [{"Ref": "PairCount"}, 2]}, {"Fn::Equals": [{"Ref": "PairCount"}, 3]}, {"Fn::Equals": [{"Ref": "PairCount"}, 4]}, {"Fn::Equals": [{"Ref": "PairCount"}, 5]}]},
+    "CreatePair2": {"Fn::Or": [{"Fn::Equals": [{"Ref": "PairCount"}, 2]}, {"Fn::Equals": [{"Ref": "PairCount"}, 3]}, {"Fn::Equals": [{"Ref": "PairCount"}, 4]}, {"Fn::Equals": [{"Ref": "PairCount"}, 5]}]},
+    "CreatePair3": {"Fn::Or": [{"Fn::Equals": [{"Ref": "PairCount"}, 3]}, {"Fn::Equals": [{"Ref": "PairCount"}, 4]}, {"Fn::Equals": [{"Ref": "PairCount"}, 5]}]},
+    "CreatePair4": {"Fn::Or": [{"Fn::Equals": [{"Ref": "PairCount"}, 4]}, {"Fn::Equals": [{"Ref": "PairCount"}, 5]}]},
+    "CreatePair5": {"Fn::Equals": [{"Ref": "PairCount"}, 5]}
+  },
+  "Resources": {
+    "SGXSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for Intel SGX nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "CidrIp": "0.0.0.0/0"},
+          {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "CidrIp": "0.0.0.0/0"},
+          {"IpProtocol": "tcp", "FromPort": 7070, "ToPort": 7080, "CidrIp": "0.0.0.0/0"}
+        ]
+      }
+    },
+    "SEVSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for AMD SEV nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "CidrIp": "0.0.0.0/0"},
+          {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "CidrIp": "0.0.0.0/0"},
+          {"IpProtocol": "tcp", "FromPort": 7070, "ToPort": 7080, "CidrIp": "0.0.0.0/0"}
+        ]
+      }
+    },
+    "MeshSecurityGroupIngress": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "MeshSecurityGroupIngressReverse": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh (reverse)",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "SGXSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SGX nodes",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "SEVSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SEV nodes",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    
+    "SGXNode1": {
+      "Type": "AWS::EC2::Instance",
+      "Condition": "CreatePair1",
+      "Properties": {
+        "InstanceType": "c5a.xlarge",
+        "ImageId": "ami-030f04819b19327fc",
+        "KeyName": {"Ref": "KeyName"},
+        "NetworkInterfaces": [{"DeviceIndex": 0, "SubnetId": {"Ref": "SubnetId"}, "GroupSet": [{"Ref": "SGXSecurityGroup"}], "AssociatePublicIpAddress": true}],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "sgx-node-1"
+          },
+          {
+            "Key": "TEEType",
+            "Value": "SGX"
+          },
+          {
+            "Key": "PairId",
+            "Value": "1"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash -xe\n",
+              "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\n",
+              "echo \"Starting SGX node 1 setup\"\n",
+              "\n",
+              "# Update system\n",
+              "apt-get update -y\n",
+              "apt-get install -y build-essential git cmake libssl-dev curl jq apache2\n",
+              "\n",
+              "# Configure TEE environment\n",
+              "mkdir -p /opt/rhombus/tee\n",
+              "mkdir -p /opt/rhombus/mesh\n",
+              "cd /opt/rhombus/tee\n",
+              "\n",
+              "# Configure TEE node\n",
+              "export TEE_TYPE=\"SGX\"\n",
+              "export TEE_ID=\"sgx-node-1\"\n",
+              "export REGION_ID=\"us-east-1\"\n",
+              "export CROSS_ATTESTATION_ENABLED=\"true\"\n",
+              "export MESH_ENABLED=\"true\"\n",
+              "\n",
+              "# Create node configuration\n",
+              "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n",
+              "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "\n",
+              "# Create mesh network configuration\n",
+              "cat > /opt/rhombus/mesh/node_info.json << EOF\n",
+              "{\n",
+              "  \"node_type\": \"SGX\",\n",
+              "  \"node_id\": \"${INSTANCE_ID}\",\n",
+              "  \"node_index\": 1,\n",
+              "  \"public_ip\": \"${PUBLIC_IP}\",\n",
+              "  \"private_ip\": \"${PRIVATE_IP}\",\n",
+              "  \"port\": 7070,\n",
+              "  \"region\": \"us-east-1\"\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Set up parameter validation for WebAssembly\n",
+              "mkdir -p /opt/rhombus/validation\n",
+              "cat > /opt/rhombus/validation/parameter_config.json << EOF\n",
+              "{\n",
+              "  \"validation\": {\n",
+              "    \"length_prefixed\": true,\n",
+              "    \"direct_format\": true,\n",
+              "    \"max_size\": 1024,\n",
+              "    \"format_detection\": true\n",
+              "  },\n",
+              "  \"cross_attestation\": {\n",
+              "    \"enabled\": true,\n",
+              "    \"partner_type\": \"SEV\",\n",
+              "    \"verification_ms_target\": 50\n",
+              "  }\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Install monitoring service\n",
+              "cat > /opt/rhombus/tee/status.sh << 'EOF'\n",
+              "#!/bin/bash\n",
+              "IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "echo \"{\\\"node_type\\\":\\\"SGX\\\",\\\"id\\\":\\\"$ID\\\",\\\"ip\\\":\\\"$IP\\\",\\\"status\\\":\\\"running\\\",\\\"timestamp\\\":\\\"$(date -u +\\\"%Y-%m-%dT%H:%M:%SZ\\\")\\\"}\">  /var/www/html/status.json\n",
+              "EOF\n",
+              "chmod +x /opt/rhombus/tee/status.sh\n",
+              "\n",
+              "# Set up web server to expose status\n",
+              "echo '*/5 * * * * root /opt/rhombus/tee/status.sh' > /etc/cron.d/tee-status\n",
+              "systemctl enable apache2\n",
+              "systemctl restart apache2\n",
+              "\n",
+              "# Write node info to publicly accessible location\n",
+              "mkdir -p /var/www/html\n",
+              "cp /opt/rhombus/mesh/node_info.json /var/www/html/\n",
+              "chown -R www-data:www-data /var/www/html/\n",
+              "\n",
+              "echo \"SGX node 1 setup complete\"\n"
+            ]]
+          }
+        }
+      }
+    },
+    
+    "SEVNode1": {
+      "Type": "AWS::EC2::Instance",
+      "Condition": "CreatePair1", 
+      "Properties": {
+        "InstanceType": "c6a.2xlarge",
+        "ImageId": "ami-030f04819b19327fc",
+        "KeyName": {"Ref": "KeyName"},
+        "NetworkInterfaces": [{"DeviceIndex": 0, "SubnetId": {"Ref": "SubnetId"}, "GroupSet": [{"Ref": "SEVSecurityGroup"}], "AssociatePublicIpAddress": true}],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "sev-node-1"
+          },
+          {
+            "Key": "TEEType",
+            "Value": "SEV"
+          },
+          {
+            "Key": "PairId",
+            "Value": "1"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash -xe\n",
+              "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\n",
+              "echo \"Starting SEV node 1 setup\"\n",
+              "\n",
+              "# Update system\n",
+              "apt-get update -y\n",
+              "apt-get install -y build-essential git cmake libssl-dev curl jq apache2\n",
+              "\n",
+              "# Configure TEE environment\n",
+              "mkdir -p /opt/rhombus/tee\n",
+              "mkdir -p /opt/rhombus/mesh\n",
+              "cd /opt/rhombus/tee\n",
+              "\n",
+              "# Configure TEE node\n",
+              "export TEE_TYPE=\"SEV\"\n",
+              "export TEE_ID=\"sev-node-1\"\n",
+              "export REGION_ID=\"us-east-1\"\n",
+              "export CROSS_ATTESTATION_ENABLED=\"true\"\n",
+              "export MESH_ENABLED=\"true\"\n",
+              "\n",
+              "# Create node configuration\n",
+              "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n",
+              "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "\n",
+              "# Create mesh network configuration\n",
+              "cat > /opt/rhombus/mesh/node_info.json << EOF\n",
+              "{\n",
+              "  \"node_type\": \"SEV\",\n",
+              "  \"node_id\": \"${INSTANCE_ID}\",\n",
+              "  \"node_index\": 1,\n",
+              "  \"public_ip\": \"${PUBLIC_IP}\",\n",
+              "  \"private_ip\": \"${PRIVATE_IP}\",\n",
+              "  \"port\": 7070,\n",
+              "  \"region\": \"us-east-1\"\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Set up parameter validation for WebAssembly\n",
+              "mkdir -p /opt/rhombus/validation\n",
+              "cat > /opt/rhombus/validation/parameter_config.json << EOF\n",
+              "{\n",
+              "  \"validation\": {\n",
+              "    \"length_prefixed\": true,\n",
+              "    \"direct_format\": true,\n",
+              "    \"max_size\": 1024,\n",
+              "    \"format_detection\": true\n",
+              "  },\n",
+              "  \"cross_attestation\": {\n",
+              "    \"enabled\": true,\n",
+              "    \"partner_type\": \"SGX\",\n",
+              "    \"verification_ms_target\": 50\n",
+              "  }\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Install monitoring service\n",
+              "cat > /opt/rhombus/tee/status.sh << 'EOF'\n",
+              "#!/bin/bash\n",
+              "IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "echo \"{\\\"node_type\\\":\\\"SEV\\\",\\\"id\\\":\\\"$ID\\\",\\\"ip\\\":\\\"$IP\\\",\\\"status\\\":\\\"running\\\",\\\"timestamp\\\":\\\"$(date -u +\\\"%Y-%m-%dT%H:%M:%SZ\\\")\\\"}\">  /var/www/html/status.json\n",
+              "EOF\n",
+              "chmod +x /opt/rhombus/tee/status.sh\n",
+              "\n",
+              "# Set up web server to expose status\n",
+              "echo '*/5 * * * * root /opt/rhombus/tee/status.sh' > /etc/cron.d/tee-status\n",
+              "systemctl enable apache2\n",
+              "systemctl restart apache2\n",
+              "\n",
+              "# Write node info to publicly accessible location\n",
+              "mkdir -p /var/www/html\n",
+              "cp /opt/rhombus/mesh/node_info.json /var/www/html/\n",
+              "chown -R www-data:www-data /var/www/html/\n",
+              "\n",
+              "echo \"SEV node 1 setup complete\"\n"
+            ]]
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "SGXIP1": {
+      "Condition": "CreatePair1",
+      "Description": "Public IP of SGX Node 1",
+      "Value": {"Fn::GetAtt": ["SGXNode1", "PublicIp"]}
+    },
+    "SEVIP1": {
+      "Condition": "CreatePair1",
+      "Description": "Public IP of SEV Node 1",
+      "Value": {"Fn::GetAtt": ["SEVNode1", "PublicIp"]}
+    }
+  }
+}

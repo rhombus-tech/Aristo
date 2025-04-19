@@ -1,0 +1,25 @@
+{
+  "error": "No WASM contracts available",
+  "node_status": [
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "available",
+      "tee_version": "unknown",
+      "node_type": "SGX",
+      "platform": "SGX",
+      "simulation": false,
+      "contracts_available": false,
+      "error": "api_error_404"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "available",
+      "tee_version": "unknown",
+      "node_type": "SEV",
+      "platform": "SEV",
+      "simulation": false,
+      "contracts_available": false,
+      "error": "api_error_404"
+    }
+  ]
+}

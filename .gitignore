@@ -17,3 +17,5 @@ Cargo.lock
 
 # Build artifacts
 *.wasm
+# Add this to .gitignore to protect credentials
+tee/integration/nasdaq/nasdaq_credentials.env

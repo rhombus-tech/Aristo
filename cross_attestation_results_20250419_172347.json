@@ -1,0 +1,66 @@
+{
+  "timestamp": "20250419_172347",
+  "total_pairs": 4,
+  "successful_executions": 4,
+  "verified_attestations": 4,
+  "accumulator_updates": 4,
+  "final_accumulator_hash": "b9fb63f40c0b48b02371687e72169cb1e119b7136740618db29ca8310c01e906",
+  "results": [
+    {
+      "sgx_node": "sgx-node-1",
+      "sev_node": "sev-node-1",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097809.450599,
+      "end_time": 1745097813.9415228,
+      "duration": 4.490923881530762,
+      "message": "Cross-attestation verified, accumulator updated: fb502ce3fcdec5ba"
+    },
+    {
+      "sgx_node": "sgx-node-1",
+      "sev_node": "i-011c91b6513c9a499",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097813.9416,
+      "end_time": 1745097818.47118,
+      "duration": 4.5295798778533936,
+      "message": "Cross-attestation verified, accumulator updated: ac545543349463c8"
+    },
+    {
+      "sgx_node": "i-00e38fb76e0e77bb6",
+      "sev_node": "sev-node-1",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097818.472636,
+      "end_time": 1745097823.007823,
+      "duration": 4.535187005996704,
+      "message": "Cross-attestation verified, accumulator updated: addb3024fc832c15"
+    },
+    {
+      "sgx_node": "i-00e38fb76e0e77bb6",
+      "sev_node": "i-011c91b6513c9a499",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097823.007885,
+      "end_time": 1745097827.419012,
+      "duration": 4.411127090454102,
+      "message": "Cross-attestation verified, accumulator updated: b9fb63f40c0b48b0"
+    }
+  ]
+}

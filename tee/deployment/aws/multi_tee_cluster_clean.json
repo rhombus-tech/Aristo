@@ -1,0 +1,282 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Multi-TEE Cluster with Intel SGX and AMD SEV Cross-Attestation for High TPS",
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "Must be the name of an existing EC2 KeyPair."
+    },
+    "SubnetId": {
+      "Description": "Primary subnet ID for instance deployment",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "SubnetId2": {
+      "Description": "Secondary subnet ID in different AZ for load balancer",
+      "Type": "String",
+      "Default": "subnet-034e5307542e20eb6"
+    },
+    "VpcId": {
+      "Description": "VPC ID for security groups",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "SGXCount": {
+      "Description": "Number of SGX nodes to deploy",
+      "Type": "Number",
+      "Default": 3,
+      "MinValue": 1,
+      "MaxValue": 10
+    },
+    "SEVCount": {
+      "Description": "Number of SEV nodes to deploy",
+      "Type": "Number",
+      "Default": 3,
+      "MinValue": 1,
+      "MaxValue": 10
+    }
+  },
+  "Mappings": {
+    "RegionMap": {
+      "us-east-1": {
+        "SGXAMI": "ami-030f04819b19327fc",
+        "SEVAMI": "ami-030f04819b19327fc"
+      },
+      "us-west-2": {
+        "SGXAMI": "ami-030f04819b19327fc",
+        "SEVAMI": "ami-030f04819b19327fc"
+      }
+    },
+    "InstanceTypeMap": {
+      "SGX": {"Type": "c5a.xlarge"},
+      "SEV": {"Type": "c6a.2xlarge"}
+    }
+  },
+  "Resources": {
+    "SGXSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for Intel SGX nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "SEVSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for AMD SEV nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "MeshSecurityGroupIngress": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "MeshSecurityGroupIngressReverse": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh (reverse)",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "SGXSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SGX nodes",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "SEVSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SEV nodes",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "ClusterLoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Name": "tee-cluster-lb",
+        "Type": "application",
+        "Scheme": "internet-facing",
+        "SecurityGroups": [
+          {"Ref": "SGXSecurityGroup"}
+        ],
+        "Subnets": [
+          {"Ref": "SubnetId"},
+          {"Ref": "SubnetId2"}
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "tee-cluster-lb"
+          }
+        ]
+      }
+    },
+    "ClusterTargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "Name": "tee-cluster-targets",
+        "Port": 80,
+        "Protocol": "HTTP",
+        "VpcId": {"Ref": "VpcId"},
+        "HealthCheckPath": "/status.json",
+        "HealthCheckProtocol": "HTTP",
+        "TargetType": "instance"
+      }
+    },
+    "ClusterListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {"Ref": "ClusterTargetGroup"}
+          }
+        ],
+        "LoadBalancerArn": {"Ref": "ClusterLoadBalancer"},
+        "Port": 80,
+        "Protocol": "HTTP"
+      }
+    },
+    
+    "SGXLambdaExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": ["lambda.amazonaws.com"]},
+            "Action": ["sts:AssumeRole"]
+          }]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+        ]
+      }
+    },
+
+    "MultiNodeCreationFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "ZipFile": "import json\nimport logging\nimport boto3\nimport cfnresponse\nimport time\n\nlogger = logging.getLogger()\nlogger.setLevel(logging.INFO)\n\nec2 = boto3.client('ec2')\nelb = boto3.client('elbv2')\n\ndef create_nodes(properties, physical_id):\n    node_type = properties['NodeType']\n    count = int(properties['Count'])\n    instance_type = properties['InstanceType']\n    image_id = properties['ImageId']\n    key_name = properties['KeyName']\n    subnet_id = properties['SubnetId']\n    security_group = properties['SecurityGroup']\n    target_group = properties.get('TargetGroup')\n    region = properties['Region']\n    \n    node_ids = []\n    node_ips = []\n\n    for i in range(count):\n        # Generate node index (1-based)\n        node_idx = i + 1\n        \n        # Create UserData with proper TEE configuration\n        user_data = generate_user_data(node_type, node_idx, region)\n        \n        # Launch instance\n        response = ec2.run_instances(\n            ImageId=image_id,\n            InstanceType=instance_type,\n            KeyName=key_name,\n            MaxCount=1,\n            MinCount=1,\n            NetworkInterfaces=[{\n                'DeviceIndex': 0,\n                'SubnetId': subnet_id,\n                'Groups': [security_group],\n                'AssociatePublicIpAddress': True\n            }],\n            UserData=user_data,\n            TagSpecifications=[{\n                'ResourceType': 'instance',\n                'Tags': [\n                    {'Key': 'Name', 'Value': f'{node_type.lower()}-node-{node_idx}'},\n                    {'Key': 'TEEType', 'Value': node_type},\n                    {'Key': 'NodeIndex', 'Value': str(node_idx)}\n                ]\n            }]\n        )\n        \n        instance_id = response['Instances'][0]['InstanceId']\n        node_ids.append(instance_id)\n        \n        # Wait for instance to be running and initialized\n        waiter = ec2.get_waiter('instance_running')\n        waiter.wait(InstanceIds=[instance_id])\n        \n        # Get instance information\n        instance_info = ec2.describe_instances(InstanceIds=[instance_id])\n        public_ip = instance_info['Reservations'][0]['Instances'][0]['PublicIpAddress']\n        node_ips.append(public_ip)\n        \n        # Register instance with target group if provided\n        if target_group:\n            elb.register_targets(\n                TargetGroupArn=target_group,\n                Targets=[{\n                    'Id': instance_id,\n                    'Port': 80\n                }]\n            )\n            \n        # Add a slight delay between instance creations to allow for auto-mesh discovery\n        if i < count - 1:\n            time.sleep(5)\n\n    return {'NodeIds': node_ids, 'NodeIPs': node_ips}\n\ndef generate_user_data(node_type, node_index, region):\n    # Determine partner type (SGX partners with SEV and vice versa)\n    partner_type = 'SEV' if node_type == 'SGX' else 'SGX'\n    \n    user_data = f'''#!/bin/bash -xe\nexec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\necho \"Starting {node_type} node setup\"\n\n# Update system\napt-get update -y\napt-get install -y build-essential git cmake libssl-dev curl jq apache2\n\n# Configure TEE environment\nmkdir -p /opt/rhombus/tee\nmkdir -p /opt/rhombus/mesh\ncd /opt/rhombus/tee\n\n# Configure TEE node\nexport TEE_TYPE=\"{node_type}\"\nexport TEE_ID=\"{node_type.lower()}-node-{node_index}\"\nexport REGION_ID=\"{region}\"\nexport CROSS_ATTESTATION_ENABLED=\"true\"\nexport MESH_ENABLED=\"true\"\n\n# Create node configuration\nPUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\nPRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\nINSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n\n# Create mesh network configuration\ncat > /opt/rhombus/mesh/node_info.json << EOF\n{{\n  \"node_type\": \"{node_type}\",\n  \"node_id\": \"${{INSTANCE_ID}}\",\n  \"node_index\": {node_index},\n  \"public_ip\": \"${{PUBLIC_IP}}\",\n  \"private_ip\": \"${{PRIVATE_IP}}\",\n  \"port\": 7070,\n  \"region\": \"{region}\"\n}}\nEOF\n\n# Set up parameter validation for WebAssembly\nmkdir -p /opt/rhombus/validation\ncat > /opt/rhombus/validation/parameter_config.json << EOF\n{{\n  \"validation\": {{\n    \"length_prefixed\": true,\n    \"direct_format\": true,\n    \"max_size\": 1024,\n    \"format_detection\": true\n  }},\n  \"cross_attestation\": {{\n    \"enabled\": true,\n    \"partner_type\": \"{partner_type}\",\n    \"verification_ms_target\": 50\n  }}\n}}\nEOF\n\n# Implement parameter format handler\ncat > /opt/rhombus/validation/param_handler.js << EOF\n/**\n * Parameter format detection and validation handler\n * Supports both length-prefixed and direct parameter formats\n */\nfunction validateParameter(buffer, expectedSize) {{\n  if (buffer.length < 4) {{\n    console.log(\"Parameter too short, using direct format\");\n    return {{ format: \"direct\", data: buffer }};\n  }}\n  \n  // Check if first 4 bytes could be a reasonable length prefix\n  const lengthValue = buffer.readUInt32LE(0);\n  \n  if (lengthValue > 0 && lengthValue <= 1024 && lengthValue + 4 <= buffer.length) {{\n    console.log(\"Detected length-prefixed format, length:\", lengthValue);\n    return {{ \n      format: \"length-prefixed\", \n      data: buffer.slice(4, 4 + lengthValue) \n    }};\n  }} else {{\n    console.log(\"Using direct format, no valid length prefix detected\");\n    return {{ format: \"direct\", data: buffer }};\n  }}\n}}\n\nmodule.exports = {{ validateParameter }};\nEOF\n\n# Install monitoring service\ncat > /opt/rhombus/tee/status.sh << 'EOF'\n#!/bin/bash\nIP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\nID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\necho \"{{\\\"node_type\\\":\\\"{node_type}\\\",\\\"id\\\":\\\"$ID\\\",\\\"ip\\\":\\\"$IP\\\",\\\"node_index\\\":{node_index},\\\"status\\\":\\\"running\\\",\\\"timestamp\\\":\\\"$(date -u +\\\"%Y-%m-%dT%H:%M:%SZ\\\")\\\"}}\">  /var/www/html/status.json\nEOF\nchmod +x /opt/rhombus/tee/status.sh\n\n# Set up web server to expose status\necho '*/1 * * * * root /opt/rhombus/tee/status.sh' > /etc/cron.d/tee-status\n\n# Prepare web directory\nmkdir -p /var/www/html\ncp /opt/rhombus/mesh/node_info.json /var/www/html/\ncp /opt/rhombus/validation/parameter_config.json /var/www/html/\n\n# Execute status script\n/opt/rhombus/tee/status.sh\n\n# Set proper permissions\nchown -R www-data:www-data /var/www/html/\n\n# Start Apache\nsystemctl enable apache2\nsystemctl restart apache2\n\necho \"{node_type} node setup complete\"\n'''\n    \n    # Convert to base64\n    import base64\n    return base64.b64encode(user_data.encode()).decode()\n\ndef delete_nodes(properties, physical_id):\n    # Parse the physical_id to get the instance IDs\n    if physical_id.startswith('nodes:'):\n        node_info = json.loads(physical_id[6:])\n        node_ids = node_info.get('NodeIds', [])\n        \n        # Delete instances\n        if node_ids:\n            ec2.terminate_instances(InstanceIds=node_ids)\n            \n            # Wait for instances to be terminated\n            waiter = ec2.get_waiter('instance_terminated')\n            waiter.wait(InstanceIds=node_ids)\n\ndef update_nodes(properties, physical_id):\n    # For updates, delete old instances and create new ones\n    delete_nodes(properties, physical_id)\n    return create_nodes(properties, physical_id)\n\ndef handler(event, context):\n    logger.info('Event: %s', event)\n    properties = event['ResourceProperties']\n    \n    # Validate required properties\n    for prop in ['NodeType', 'Count', 'InstanceType', 'ImageId', 'KeyName', 'SubnetId', 'SecurityGroup', 'Region']:\n        if prop not in properties:\n            return cfnresponse.send(event, context, cfnresponse.FAILED, {\n                'Error': f'Missing required property: {prop}'\n            })\n    \n    physical_id = event.get('PhysicalResourceId')\n    response_data = {}\n    \n    try:\n        if event['RequestType'] == 'Create':\n            result = create_nodes(properties, physical_id)\n            response_data = result\n            physical_id = 'nodes:' + json.dumps(result)\n        elif event['RequestType'] == 'Update':\n            result = update_nodes(properties, physical_id)\n            response_data = result\n            physical_id = 'nodes:' + json.dumps(result)\n        elif event['RequestType'] == 'Delete':\n            delete_nodes(properties, physical_id)\n        \n        cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, physical_id)\n    except Exception as e:\n        logger.exception('Failed to process request')\n        cfnresponse.send(event, context, cfnresponse.FAILED, {\n            'Error': str(e)\n        }, physical_id)\n"
+        },
+        "Handler": "index.handler",
+        "Role": {"Fn::GetAtt": ["SGXLambdaExecutionRole", "Arn"]},
+        "Runtime": "python3.9",
+        "Timeout": 900,
+        "MemorySize": 128
+      }
+    },
+
+    "SGXNodeCreator": {
+      "Type": "Custom::NodeCreator",
+      "Properties": {
+        "ServiceToken": {"Fn::GetAtt": ["MultiNodeCreationFunction", "Arn"]},
+        "NodeType": "SGX",
+        "Count": {"Ref": "SGXCount"},
+        "InstanceType": {"Fn::FindInMap": ["InstanceTypeMap", "SGX", "Type"]},
+        "ImageId": {"Fn::FindInMap": ["RegionMap", {"Ref": "AWS::Region"}, "SGXAMI"]},
+        "KeyName": {"Ref": "KeyName"},
+        "SubnetId": {"Ref": "SubnetId"},
+        "SecurityGroup": {"Ref": "SGXSecurityGroup"},
+        "TargetGroup": {"Ref": "ClusterTargetGroup"},
+        "Region": {"Ref": "AWS::Region"}
+      },
+      "DependsOn": ["MultiNodeCreationFunction"]
+    },
+    
+    "SEVNodeCreator": {
+      "Type": "Custom::NodeCreator",
+      "Properties": {
+        "ServiceToken": {"Fn::GetAtt": ["MultiNodeCreationFunction", "Arn"]},
+        "NodeType": "SEV",
+        "Count": {"Ref": "SEVCount"},
+        "InstanceType": {"Fn::FindInMap": ["InstanceTypeMap", "SEV", "Type"]},
+        "ImageId": {"Fn::FindInMap": ["RegionMap", {"Ref": "AWS::Region"}, "SEVAMI"]},
+        "KeyName": {"Ref": "KeyName"},
+        "SubnetId": {"Ref": "SubnetId"},
+        "SecurityGroup": {"Ref": "SEVSecurityGroup"},
+        "TargetGroup": {"Ref": "ClusterTargetGroup"},
+        "Region": {"Ref": "AWS::Region"}
+      },
+      "DependsOn": ["MultiNodeCreationFunction", "SGXNodeCreator"]
+    }
+
+  },
+  "Outputs": {
+    "ClusterEndpoint": {
+      "Description": "Endpoint for the TEE cluster load balancer",
+      "Value": {"Fn::GetAtt": ["ClusterLoadBalancer", "DNSName"]}
+    },
+    "SGXNodeIPs": {
+      "Description": "Public IPs of SGX Nodes",
+      "Value": {"Fn::Join": [", ", {"Fn::GetAtt": ["SGXNodeCreator", "NodeIPs"]}]}
+    },
+    "SEVNodeIPs": {
+      "Description": "Public IPs of SEV Nodes",
+      "Value": {"Fn::Join": [", ", {"Fn::GetAtt": ["SEVNodeCreator", "NodeIPs"]}]}
+    },
+    "SGXNodeCount": {
+      "Description": "Number of SGX Nodes",
+      "Value": {"Ref": "SGXCount"}
+    },
+    "SEVNodeCount": {
+      "Description": "Number of SEV Nodes",
+      "Value": {"Ref": "SEVCount"}
+    }
+  }
+}

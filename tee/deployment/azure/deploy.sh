@@ -126,7 +126,7 @@ echo "Deploying ARM template for $NUMBER_OF_TEE_PAIRS TEE pairs..."
 az deployment group create \
     --resource-group "$RESOURCE_GROUP" \
     --name "$DEPLOYMENT_NAME" \
-    --template-file "$(dirname "$0")/azuredeploy.json" \
+    --template-file "$(dirname "$0")/azuredeploy-fixed.json" \
     --parameters \
         location="$LOCATION" \
         prefix="$PREFIX" \

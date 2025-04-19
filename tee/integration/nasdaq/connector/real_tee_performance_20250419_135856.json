@@ -1,0 +1,41 @@
+{
+  "error": "'fallback-node'",
+  "timestamp": "2025-04-19T17:58:55Z",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/talzisckind/Downloads/aristo-fresh 2/tee/integration/nasdaq/connector/real_tee_perf.py\", line 659, in run_performance_test\n    length_prefixed_result = processor.process_market_data(\n        messages=messages,\n    ...<2 lines>...\n        enforce_security=force_attestation\n    )\n  File \"/Users/talzisckind/Downloads/aristo-fresh 2/tee/integration/nasdaq/connector/mesh_integration.py\", line 618, in process_market_data\n    self._ensure_processing_threads()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"/Users/talzisckind/Downloads/aristo-fresh 2/tee/integration/nasdaq/connector/mesh_integration.py\", line 839, in _ensure_processing_threads\n    logger.info(f\"Started processing worker for node {node_id} ({self.mesh_client.nodes[node_id].node_type})\")\n                                                                 ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^\nKeyError: 'fallback-node'\n",
+  "node_status": [
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "available",
+      "tee_version": "unknown",
+      "node_type": "SGX",
+      "platform": "SGX",
+      "simulation": false,
+      "contracts_available": false,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "available",
+      "tee_version": "unknown",
+      "node_type": "SEV",
+      "platform": "SEV",
+      "simulation": false,
+      "contracts_available": false,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "sgx-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.82.138.122 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "sev-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 44.203.182.22 port 22: Operation timed out\n"
+    }
+  ]
+}

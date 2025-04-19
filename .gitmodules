@@ -7,3 +7,6 @@
 [submodule "enarx"]
 	path = enarx
 	url = https://github.com/rhombus-tech/enarx.git
+[submodule "external/signatures"]
+	path = external/signatures
+	url = https://github.com/rhombus-tech/signatures.git

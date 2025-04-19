@@ -1,0 +1,361 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dual TEE Cross-Attestation Framework with Intel SGX and AMD SEV",
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "Must be the name of an existing EC2 KeyPair."
+    },
+    "SubnetId": {
+      "Description": "Subnet ID for deployment",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "VpcId": {
+      "Description": "VPC ID for security groups",
+      "Type": "AWS::EC2::VPC::Id"
+    }
+  },
+  "Resources": {
+    "SGXSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for Intel SGX node",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "SEVSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for AMD SEV node",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "SGXNodeInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": "c5a.xlarge",
+        "ImageId": "ami-030f04819b19327fc",
+        "KeyName": {"Ref": "KeyName"},
+        "NetworkInterfaces": [{"DeviceIndex": 0, "SubnetId": {"Ref": "SubnetId"}, "GroupSet": [{"Ref": "SGXSecurityGroup"}], "AssociatePublicIpAddress": true}],
+        
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "sgx-node"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash -xe\n",
+              "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\n",
+              "echo \"Starting SGX node setup\"\n",
+              "\n",
+              "# Update system\n",
+              "apt-get update -y\n",
+              "apt-get install -y build-essential git cmake libssl-dev curl jq\n",
+              "\n",
+              "# Set up Intel SGX\n",
+              "mkdir -p /opt/intel\n",
+              "cd /opt/intel\n",
+              "curl -O https://download.01.org/intel-sgx/sgx-linux/2.14/distro/ubuntu20.04-server/sgx_linux_x64_sdk_2.14.100.2.bin\n",
+              "chmod +x sgx_linux_x64_sdk_2.14.100.2.bin\n",
+              "echo -e 'no\\n/opt/intel' | ./sgx_linux_x64_sdk_2.14.100.2.bin\n",
+              "source /opt/intel/sgxsdk/environment\n",
+              "\n",
+              "# Configure TEE environment\n",
+              "mkdir -p /opt/rhombus/tee\n",
+              "cd /opt/rhombus/tee\n",
+              "\n",
+              "# Configure TEE node\n",
+              "export TEE_TYPE=\"SGX\"\n",
+              "export TEE_ID=\"sgx-node\"\n",
+              "export REGION_ID=\"us-east-1\"\n",
+              "export CROSS_ATTESTATION_ENABLED=\"true\"\n",
+              "export PARTNER_TEE_TYPE=\"SEV\"\n",
+              "\n",
+              "# Create node configuration\n",
+              "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n",
+              "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "\n",
+              "# Create mesh network configuration\n",
+              "mkdir -p /opt/rhombus/mesh\n",
+              "cat > /opt/rhombus/mesh/node_info.json << EOF\n",
+              "{\n",
+              "  \"node_type\": \"SGX\",\n",
+              "  \"node_id\": \"${INSTANCE_ID}\",\n",
+              "  \"public_ip\": \"${PUBLIC_IP}\",\n",
+              "  \"private_ip\": \"${PRIVATE_IP}\",\n",
+              "  \"port\": 7070,\n",
+              "  \"region\": \"us-east-1\"\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Set up parameter validation for WebAssembly\n",
+              "mkdir -p /opt/rhombus/validation\n",
+              "cat > /opt/rhombus/validation/parameter_config.json << EOF\n",
+              "{\n",
+              "  \"validation\": {\n",
+              "    \"length_prefixed\": true,\n",
+              "    \"direct_format\": true,\n",
+              "    \"max_size\": 1024,\n",
+              "    \"format_detection\": true\n",
+              "  },\n",
+              "  \"cross_attestation\": {\n",
+              "    \"enabled\": true,\n",
+              "    \"partner_type\": \"SEV\",\n",
+              "    \"verification_ms_target\": 100\n",
+              "  }\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Implement parameter format handler\n",
+              "cat > /opt/rhombus/validation/param_handler.js << EOF\n",
+              "/**\n",
+              " * Parameter format detection and validation handler\n",
+              " * Supports both length-prefixed and direct parameter formats\n",
+              " */\n",
+              "function validateParameter(buffer, expectedSize) {\n",
+              "  if (buffer.length < 4) {\n",
+              "    console.log(\"Parameter too short, using direct format\");\n",
+              "    return { format: \"direct\", data: buffer };\n",
+              "  }\n",
+              "  \n",
+              "  // Check if first 4 bytes could be a reasonable length prefix\n",
+              "  const lengthValue = buffer.readUInt32LE(0);\n",
+              "  \n",
+              "  if (lengthValue > 0 && lengthValue <= 1024 && lengthValue + 4 <= buffer.length) {\n",
+              "    console.log(\"Detected length-prefixed format, length:\", lengthValue);\n",
+              "    return { \n",
+              "      format: \"length-prefixed\", \n",
+              "      data: buffer.slice(4, 4 + lengthValue) \n",
+              "    };\n",
+              "  } else {\n",
+              "    console.log(\"Using direct format, no valid length prefix detected\");\n",
+              "    return { format: \"direct\", data: buffer };\n",
+              "  }\n",
+              "}\n",
+              "\n",
+              "module.exports = { validateParameter };\n",
+              "EOF\n",
+              "\n",
+              "# Install monitoring service\n",
+              "cat > /opt/rhombus/tee/status.sh << 'EOF'\n",
+              "#!/bin/bash\n",
+              "IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "echo \"{\\\"node_type\\\":\\\"SGX\\\",\\\"id\\\":\\\"$ID\\\",\\\"ip\\\":\\\"$IP\\\",\\\"status\\\":\\\"running\\\",\\\"timestamp\\\":\\\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\\\")\\\"}\" > /var/www/html/status.json\n",
+              "EOF\n",
+              "chmod +x /opt/rhombus/tee/status.sh\n",
+              "\n",
+              "# Set up simple web server to expose status\n",
+              "apt-get install -y apache2\n",
+              "echo '*/5 * * * * root /opt/rhombus/tee/status.sh' > /etc/cron.d/tee-status\n",
+              "systemctl enable apache2\n",
+              "systemctl restart apache2\n",
+              "\n",
+              "# Write node info to publicly accessible location\n",
+              "mkdir -p /var/www/html\n",
+              "cp /opt/rhombus/mesh/node_info.json /var/www/html/\n",
+              "chown -R www-data:www-data /var/www/html/\n",
+              "\n",
+              "echo \"SGX node setup complete\"\n"
+            ]]
+          }
+        }
+      }
+    },
+    "SEVNodeInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": "c6a.2xlarge",
+        "ImageId": "ami-030f04819b19327fc",
+        "KeyName": {"Ref": "KeyName"},
+        "NetworkInterfaces": [{"DeviceIndex": 0, "SubnetId": {"Ref": "SubnetId"}, "GroupSet": [{"Ref": "SEVSecurityGroup"}], "AssociatePublicIpAddress": true}],
+        
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "sev-node"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash -xe\n",
+              "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\n",
+              "echo \"Starting SEV node setup\"\n",
+              "\n",
+              "# Update system\n",
+              "apt-get update -y\n",
+              "apt-get install -y build-essential git cmake libssl-dev curl jq\n",
+              "\n",
+              "# Set up AMD SEV environment\n",
+              "mkdir -p /opt/amd\n",
+              "cd /opt/amd\n",
+              "git clone https://github.com/AMDESE/sev-tool.git\n",
+              "cd sev-tool\n",
+              "make\n",
+              "make install\n",
+              "\n",
+              "# Configure TEE environment\n",
+              "mkdir -p /opt/rhombus/tee\n",
+              "cd /opt/rhombus/tee\n",
+              "\n",
+              "# Configure TEE node\n",
+              "export TEE_TYPE=\"SEV\"\n",
+              "export TEE_ID=\"sev-node\"\n",
+              "export REGION_ID=\"us-east-1\"\n",
+              "export CROSS_ATTESTATION_ENABLED=\"true\"\n",
+              "export PARTNER_TEE_TYPE=\"SGX\"\n",
+              "\n",
+              "# Create node configuration\n",
+              "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n",
+              "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "\n",
+              "# Create mesh network configuration\n",
+              "mkdir -p /opt/rhombus/mesh\n",
+              "cat > /opt/rhombus/mesh/node_info.json << EOF\n",
+              "{\n",
+              "  \"node_type\": \"SEV\",\n",
+              "  \"node_id\": \"${INSTANCE_ID}\",\n",
+              "  \"public_ip\": \"${PUBLIC_IP}\",\n",
+              "  \"private_ip\": \"${PRIVATE_IP}\",\n",
+              "  \"port\": 7070,\n",
+              "  \"region\": \"us-east-1\"\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Set up parameter validation for WebAssembly\n",
+              "mkdir -p /opt/rhombus/validation\n",
+              "cat > /opt/rhombus/validation/parameter_config.json << EOF\n",
+              "{\n",
+              "  \"validation\": {\n",
+              "    \"length_prefixed\": true,\n",
+              "    \"direct_format\": true,\n",
+              "    \"max_size\": 1024,\n",
+              "    \"format_detection\": true\n",
+              "  },\n",
+              "  \"cross_attestation\": {\n",
+              "    \"enabled\": true,\n",
+              "    \"partner_type\": \"SGX\",\n",
+              "    \"verification_ms_target\": 100\n",
+              "  }\n",
+              "}\n",
+              "EOF\n",
+              "\n",
+              "# Implement parameter format handler\n",
+              "cat > /opt/rhombus/validation/param_handler.js << EOF\n",
+              "/**\n",
+              " * Parameter format detection and validation handler\n",
+              " * Supports both length-prefixed and direct parameter formats\n",
+              " */\n",
+              "function validateParameter(buffer, expectedSize) {\n",
+              "  if (buffer.length < 4) {\n",
+              "    console.log(\"Parameter too short, using direct format\");\n",
+              "    return { format: \"direct\", data: buffer };\n",
+              "  }\n",
+              "  \n",
+              "  // Check if first 4 bytes could be a reasonable length prefix\n",
+              "  const lengthValue = buffer.readUInt32LE(0);\n",
+              "  \n",
+              "  if (lengthValue > 0 && lengthValue <= 1024 && lengthValue + 4 <= buffer.length) {\n",
+              "    console.log(\"Detected length-prefixed format, length:\", lengthValue);\n",
+              "    return { \n",
+              "      format: \"length-prefixed\", \n",
+              "      data: buffer.slice(4, 4 + lengthValue) \n",
+              "    };\n",
+              "  } else {\n",
+              "    console.log(\"Using direct format, no valid length prefix detected\");\n",
+              "    return { format: \"direct\", data: buffer };\n",
+              "  }\n",
+              "}\n",
+              "\n",
+              "module.exports = { validateParameter };\n",
+              "EOF\n",
+              "\n",
+              "# Install monitoring service\n",
+              "cat > /opt/rhombus/tee/status.sh << 'EOF'\n",
+              "#!/bin/bash\n",
+              "IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+              "ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+              "echo \"{\\\"node_type\\\":\\\"SEV\\\",\\\"id\\\":\\\"$ID\\\",\\\"ip\\\":\\\"$IP\\\",\\\"status\\\":\\\"running\\\",\\\"timestamp\\\":\\\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\\\")\\\"}\" > /var/www/html/status.json\n",
+              "EOF\n",
+              "chmod +x /opt/rhombus/tee/status.sh\n",
+              "\n",
+              "# Set up simple web server to expose status\n",
+              "apt-get install -y apache2\n",
+              "echo '*/5 * * * * root /opt/rhombus/tee/status.sh' > /etc/cron.d/tee-status\n",
+              "systemctl enable apache2\n",
+              "systemctl restart apache2\n",
+              "\n",
+              "# Write node info to publicly accessible location\n",
+              "mkdir -p /var/www/html\n",
+              "cp /opt/rhombus/mesh/node_info.json /var/www/html/\n",
+              "chown -R www-data:www-data /var/www/html/\n",
+              "\n",
+              "echo \"SEV node setup complete\"\n"
+            ]]
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "SGXNodePublicIP": {
+      "Description": "Public IP address of Intel SGX node",
+      "Value": {"Fn::GetAtt": ["SGXNodeInstance", "PublicIp"]}
+    },
+    "SGXNodePrivateIP": {
+      "Description": "Private IP address of Intel SGX node",
+      "Value": {"Fn::GetAtt": ["SGXNodeInstance", "PrivateIp"]}
+    },
+    "SEVNodePublicIP": {
+      "Description": "Public IP address of AMD SEV node",
+      "Value": {"Fn::GetAtt": ["SEVNodeInstance", "PublicIp"]}
+    },
+    "SEVNodePrivateIP": {
+      "Description": "Private IP address of AMD SEV node",
+      "Value": {"Fn::GetAtt": ["SEVNodeInstance", "PrivateIp"]}
+    },
+    "SGXNodeStatusURL": {
+      "Description": "URL to check Intel SGX node status",
+      "Value": {"Fn::Join": ["", ["http://", {"Fn::GetAtt": ["SGXNodeInstance", "PublicDnsName"]}, "/status.json"]]}
+    },
+    "SEVNodeStatusURL": {
+      "Description": "URL to check AMD SEV node status",
+      "Value": {"Fn::Join": ["", ["http://", {"Fn::GetAtt": ["SEVNodeInstance", "PublicDnsName"]}, "/status.json"]]}
+    }
+  }
+}

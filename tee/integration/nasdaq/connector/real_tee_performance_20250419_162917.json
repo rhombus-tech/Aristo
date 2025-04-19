@@ -1,0 +1,67 @@
+{
+  "timestamp": "2025-04-19T20:29:16Z",
+  "message_count": 1000,
+  "batch_size": 500,
+  "message_size_bytes": 632,
+  "node_status": [
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "available",
+      "tee_version": "unknown",
+      "node_type": "SGX",
+      "platform": "SGX",
+      "simulation": false,
+      "contracts_available": false,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "available",
+      "tee_version": "unknown",
+      "node_type": "SEV",
+      "platform": "SEV",
+      "simulation": false,
+      "contracts_available": false,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "sgx-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.82.138.122 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "sev-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 44.203.182.22 port 22: Operation timed out\n"
+    }
+  ],
+  "formats_tested": [
+    "length-prefixed",
+    "direct"
+  ],
+  "overall_stats": {},
+  "security_stats": {
+    "attestations_verified": 0,
+    "attestation_percentage": 0.0,
+    "format_confusion_prevented": 0,
+    "buffer_overflow_prevented": 0
+  },
+  "length_prefixed": {
+    "tps": 9324.011479662724,
+    "success_rate": 0,
+    "attestation_verified": 0
+  },
+  "direct": {
+    "tps": 9557.924481006312,
+    "success_rate": 0
+  },
+  "cross_attestation": {
+    "verified": false,
+    "time_seconds": 0.28730177879333496,
+    "security_notes": "Cross-attestation requires matching results from both SGX/SEV platforms"
+  }
+}

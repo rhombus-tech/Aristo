@@ -1,0 +1,540 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Multi-TEE Cluster with Intel SGX and AMD SEV Cross-Attestation for High TPS",
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "Must be the name of an existing EC2 KeyPair."
+    },
+    "SubnetId": {
+      "Description": "Subnet ID for deployment",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "VpcId": {
+      "Description": "VPC ID for security groups",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "SGXCount": {
+      "Description": "Number of SGX nodes to deploy",
+      "Type": "Number",
+      "Default": 3,
+      "MinValue": 1,
+      "MaxValue": 10
+    },
+    "SEVCount": {
+      "Description": "Number of SEV nodes to deploy",
+      "Type": "Number",
+      "Default": 3,
+      "MinValue": 1,
+      "MaxValue": 10
+    }
+  },
+  "Resources": {
+    "SGXSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for Intel SGX nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "SEVSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for AMD SEV nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "MeshSecurityGroupIngress": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "MeshSecurityGroupIngressReverse": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh (reverse)",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "SGXSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SGX nodes",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "SEVSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SEV nodes",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": "-1"
+      }
+    },
+    "ClusterLoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Name": "tee-cluster-lb",
+        "Type": "application",
+        "Scheme": "internet-facing",
+        "SecurityGroups": [
+          {"Ref": "SGXSecurityGroup"}
+        ],
+        "Subnets": [
+          {"Ref": "SubnetId"}
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "tee-cluster-lb"
+          }
+        ]
+      }
+    },
+    "ClusterTargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "Name": "tee-cluster-targets",
+        "Port": 80,
+        "Protocol": "HTTP",
+        "VpcId": {"Ref": "VpcId"},
+        "HealthCheckPath": "/status.json",
+        "HealthCheckProtocol": "HTTP",
+        "TargetType": "instance"
+      }
+    },
+    "ClusterListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {"Ref": "ClusterTargetGroup"}
+          }
+        ],
+        "LoadBalancerArn": {"Ref": "ClusterLoadBalancer"},
+        "Port": 80,
+        "Protocol": "HTTP"
+      }
+    },
+      "Type": "AWS::CloudFormation::Macro",
+      "Properties": {
+        "Name": "SEVBatchBuilder",
+        "FunctionName": {
+          "Fn::GetAtt": ["BatchBuilderFunction", "Arn"]
+        },
+        "Parameters": {
+          "Count": {"Ref": "SEVPairCount"},
+          "Type": "SEV",
+          "InstanceType": "c6a.2xlarge",
+          "AMI": "ami-030f04819b19327fc",
+          "SecurityGroup": {"Ref": "SEVSecurityGroup"}
+        }
+      }
+    },
+    "BatchBuilderFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "ZipFile": {
+            "Fn::Join": [
+              "\n",
+              [
+                "import json",
+                "import cfnresponse",
+                "",
+                "def handler(event, context):",
+                "    # Process the event and generate resources",
+                "    instance_count = int(event['params']['Count'])",
+                "    node_type = event['params']['Type']",
+                "    instance_type = event['params']['InstanceType']",
+                "    ami_id = event['params']['AMI']",
+                "    security_group = event['params']['SecurityGroup']",
+                "    ",
+                "    resources = {}",
+                "    for i in range(instance_count):",
+                "        instance_name = f'{node_type}Node{i+1}'",
+                "        resources[instance_name] = {",
+                "            'Type': 'AWS::EC2::Instance',",
+                "            'Properties': {",
+                "                'InstanceType': instance_type,",
+                "                'ImageId': ami_id,",
+                "                'KeyName': {'Ref': 'KeyName'},",
+                "                'NetworkInterfaces': [{",
+                "                    'DeviceIndex': 0,",
+                "                    'SubnetId': {'Ref': 'SubnetId'},",
+                "                    'GroupSet': [security_group],",
+                "                    'AssociatePublicIpAddress': True",
+                "                }],",
+                "                'Tags': [",
+                "                    {",
+                "                        'Key': 'Name',",
+                "                        'Value': f'{node_type.lower()}-node-{i+1}'",
+                "                    },",
+                "                    {",
+                "                        'Key': 'TEEType',",
+                "                        'Value': node_type",
+                "                    }",
+                "                ],",
+                "                'UserData': {",
+                "                    'Fn::Base64': {",
+                "                        'Fn::Join': ["", [",
+                "                            "#!/bin/bash -xe\n",",
+                "                            "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\n",",
+                "                            "echo \"Starting ", node_type, " node setup\"\n",",
+                "                            "\n",",
+                "                            "# Update system\n",",
+                "                            "apt-get update -y\n",",
+                "                            "apt-get install -y build-essential git cmake libssl-dev curl jq apache2\n",",
+                "                            "\n",",
+                "                            "# Configure TEE environment\n",",
+                "                            "mkdir -p /opt/rhombus/tee\n",",
+                "                            "mkdir -p /opt/rhombus/mesh\n",",
+                "                            "cd /opt/rhombus/tee\n",",
+                "                            "\n",",
+                "                            "# Configure TEE node\n",",
+                "                            "export TEE_TYPE=\"", node_type, "\"\n",",
+                "                            "export TEE_ID=\"", node_type, "-node-", i+1, "\"\n",",
+                "                            "export REGION_ID=\"us-east-1\"\n",",
+                "                            "export CROSS_ATTESTATION_ENABLED=\"true\"\n",",
+                "                            "export MESH_ENABLED=\"true\"\n",",
+                "                            "\n",",
+                "                            "# Create node configuration\n",",
+                "                            "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",",
+                "                            "PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)\n",",
+                "                            "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",",
+                "                            "\n",",
+                "                            "# Create mesh network configuration\n",",
+                "                            "cat > /opt/rhombus/mesh/node_info.json << EOF\n",",
+                "                            "{\n",",
+                "                            "  \"node_type\": \"", node_type, "\",\n",",
+                "                            "  \"node_id\": \"${INSTANCE_ID}\",\n",",
+                "                            "  \"public_ip\": \"${PUBLIC_IP}\",\n",",
+                "                            "  \"private_ip\": \"${PRIVATE_IP}\",\n",",
+                "                            "  \"port\": 7070,\n",",
+                "                            "  \"region\": \"us-east-1\"\n",",
+                "                            "}\n",",
+                "                            "EOF\n",",
+                "                            "\n",",
+                "                            "# Set up parameter validation for WebAssembly\n",",
+                "                            "mkdir -p /opt/rhombus/validation\n",",
+                "                            "cat > /opt/rhombus/validation/parameter_config.json << EOF\n",",
+                "                            "{\n",",
+                "                            "  \"validation\": {\n",",
+                "                            "    \"length_prefixed\": true,\n",",
+                "                            "    \"direct_format\": true,\n",",
+                "                            "    \"max_size\": 1024,\n",",
+                "                            "    \"format_detection\": true\n",",
+                "                            "  },\n",",
+                "                            "  \"cross_attestation\": {\n",",
+                "                            "    \"enabled\": true,\n",",
+                "                            "    \"partner_type\": \"", ("SEV" if node_type == "SGX" else "SGX"), "\",\n",",
+                "                            "    \"verification_ms_target\": 50\n",",
+                "                            "  }\n",",
+                "                            "}\n",",
+                "                            "EOF\n",",
+                "                            "\n",",
+                "                            "# Implement parameter format handler\n",",
+                "                            "cat > /opt/rhombus/validation/param_handler.js << EOF\n",",
+                "                            "/**\n",",
+                "                            " * Parameter format detection and validation handler\n",",
+                "                            " * Supports both length-prefixed and direct parameter formats\n",",
+                "                            " */\n",",
+                "                            "function validateParameter(buffer, expectedSize) {\n",",
+                "                            "  if (buffer.length < 4) {\n",",
+                "                            "    console.log(\"Parameter too short, using direct format\");\n",",
+                "                            "    return { format: \"direct\", data: buffer };\n",",
+                "                            "  }\n",",
+                "                            "  \n",",
+                "                            "  // Check if first 4 bytes could be a reasonable length prefix\n",",
+                "                            "  const lengthValue = buffer.readUInt32LE(0);\n",",
+                "                            "  \n",",
+                "                            "  if (lengthValue > 0 && lengthValue <= 1024 && lengthValue + 4 <= buffer.length) {\n",",
+                "                            "    console.log(\"Detected length-prefixed format, length:\", lengthValue);\n",",
+                "                            "    return { \n",",
+                "                            "      format: \"length-prefixed\", \n",",
+                "                            "      data: buffer.slice(4, 4 + lengthValue) \n",",
+                "                            "    };\n",",
+                "                            "  } else {\n",",
+                "                            "    console.log(\"Using direct format, no valid length prefix detected\");\n",",
+                "                            "    return { format: \"direct\", data: buffer };\n",",
+                "                            "  }\n",",
+                "                            "}\n",",
+                "                            "\n",",
+                "                            "module.exports = { validateParameter };\n",",
+                "                            "EOF\n",",
+                "                            "\n",",
+                "                            "# Install monitoring service\n",",
+                "                            "cat > /opt/rhombus/tee/status.sh << 'EOF'\n",",
+                "                            "#!/bin/bash\n",",
+                "                            "IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)\n",",
+                "                            "ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",",
+                "                            "echo \"{\\\"node_type\\\":\\\"", node_type, "\\\",\\\"id\\\":\\\"$ID\\\",\\\"ip\\\":\\\"$IP\\\",\\\"status\\\":\\\"running\\\",\\\"timestamp\\\":\\\"$(date -u +\\\"%Y-%m-%dT%H:%M:%SZ\\\")\\\"}\">  /var/www/html/status.json\n",",
+                "                            "EOF\n",",
+                "                            "chmod +x /opt/rhombus/tee/status.sh\n",",
+                "                            "\n",",
+                "                            "# Set up web server to expose status\n",",
+                "                            "echo '*/1 * * * * root /opt/rhombus/tee/status.sh' > /etc/cron.d/tee-status\n",",
+                "                            "\n",",
+                "                            "# Prepare web directory\n",",
+                "                            "mkdir -p /var/www/html\n",",
+                "                            "cp /opt/rhombus/mesh/node_info.json /var/www/html/\n",",
+                "                            "cp /opt/rhombus/validation/parameter_config.json /var/www/html/\n",",
+                "                            "\n",",
+                "                            "# Execute status script\n",",
+                "                            "/opt/rhombus/tee/status.sh\n",",
+                "                            "\n",",
+                "                            "# Set proper permissions\n",",
+                "                            "chown -R www-data:www-data /var/www/html/\n",",
+                "                            "\n",",
+                "                            "# Start Apache\n",",
+                "                            "systemctl enable apache2\n",",
+                "                            "systemctl restart apache2\n",",
+                "                            "\n",",
+                "                            "echo \"", node_type, " node setup complete\"\n","
+                "                        ]]
+                "                    }
+                "                }
+                "            }
+                "        }
+                "    
+                "    response = {
+                "        'requestId': event['requestId'],
+                "        'status': 'success',
+                "        'fragment': resources
+                "    }
+                "    return response
+                ""
+              ]
+            ]
+          }
+        },
+        "Handler": "index.handler",
+        "Runtime": "python3.9",
+        "Role": {"Fn::GetAtt": ["BatchBuilderRole", "Arn"]},
+        "Timeout": 30
+      }
+    },
+    "BatchBuilderRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": ["lambda.amazonaws.com"]},
+            "Action": ["sts:AssumeRole"]
+          }]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ]
+      }
+    },
+    "SGXSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for Intel SGX nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "SEVSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for AMD SEV nodes",
+        "VpcId": {"Ref": "VpcId"},
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 7070,
+            "ToPort": 7080,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "MeshSecurityGroupIngress": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": -1
+      }
+    },
+    "MeshSecurityGroupIngressReverse": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between TEE nodes in the mesh (reverse)",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": -1
+      }
+    },
+    "SGXSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SGX nodes",
+        "GroupId": {"Ref": "SGXSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SGXSecurityGroup"},
+        "IpProtocol": -1
+      }
+    },
+    "SEVSelfIngressRule": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "Description": "Allow all traffic between SEV nodes",
+        "GroupId": {"Ref": "SEVSecurityGroup"},
+        "SourceSecurityGroupId": {"Ref": "SEVSecurityGroup"},
+        "IpProtocol": -1
+      }
+    },
+    "ClusterLoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Name": "tee-cluster-lb",
+        "Type": "application",
+        "Scheme": "internet-facing",
+        "SecurityGroups": [
+          {"Ref": "SGXSecurityGroup"}
+        ],
+        "Subnets": [
+          {"Ref": "SubnetId"}
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "tee-cluster-lb"
+          }
+        ]
+      }
+    },
+    "ClusterTargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "Name": "tee-cluster-targets",
+        "Port": 80,
+        "Protocol": "HTTP",
+        "VpcId": {"Ref": "VpcId"},
+        "HealthCheckPath": "/node_info.json",
+        "HealthCheckProtocol": "HTTP",
+        "TargetType": "instance"
+      }
+    },
+    "ClusterListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {"Ref": "ClusterTargetGroup"}
+          }
+        ],
+        "LoadBalancerArn": {"Ref": "ClusterLoadBalancer"},
+        "Port": 80,
+        "Protocol": "HTTP"
+      }
+    }
+  },
+  "Mappings": {
+    "RegionMap": {
+      "us-east-1": {
+        "SGX": "ami-030f04819b19327fc",
+        "SEV": "ami-030f04819b19327fc"
+      },
+      "us-west-2": {
+        "SGX": "ami-030f04819b19327fc",
+        "SEV": "ami-030f04819b19327fc"
+      }
+    }
+  },
+  
+  "Outputs": {
+    "ClusterEndpoint": {
+      "Description": "Endpoint for the TEE cluster load balancer",
+      "Value": {"Fn::GetAtt": ["ClusterLoadBalancer", "DNSName"]}
+    }
+  }
+}

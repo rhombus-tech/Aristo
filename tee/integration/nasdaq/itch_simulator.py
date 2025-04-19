@@ -235,7 +235,12 @@ class ITCHMessageGenerator:
         
         # Generate execution details
         timestamp = self._get_nanosecond_timestamp()
-        shares_executed = min(order["shares"], random.randint(100, order["shares"]))
+        # Fix: Ensure min value is less than max value for randint
+        if order["shares"] >= 100:
+            shares_executed = min(order["shares"], random.randint(100, order["shares"]))
+        else:
+            # If shares are less than 100, execute all remaining shares
+            shares_executed = order["shares"]
         match_number = random.randint(1, 999999)
         
         # Update the order's remaining shares
@@ -276,7 +281,12 @@ class ITCHMessageGenerator:
         
         # Generate cancellation details
         timestamp = self._get_nanosecond_timestamp()
-        shares_cancelled = min(order["shares"], random.randint(100, order["shares"]))
+        # Fix: Ensure min value is less than max value for randint
+        if order["shares"] >= 100:
+            shares_cancelled = min(order["shares"], random.randint(100, order["shares"]))
+        else:
+            # If shares are less than 100, cancel all remaining shares
+            shares_cancelled = order["shares"]
         
         # Update the order's remaining shares
         order["shares"] -= shares_cancelled

@@ -1,0 +1,62 @@
+{
+  "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+  "parameter_format": "length-prefixed",
+  "test_time": "20250419_171802",
+  "total_pairs": 4,
+  "successful_pairs": 4,
+  "verified_pairs": 4,
+  "results": [
+    {
+      "sgx_node": "sgx-node-1",
+      "sev_node": "sev-node-1",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097463.582719,
+      "end_time": 1745097468.602964,
+      "duration": 5.020244836807251
+    },
+    {
+      "sgx_node": "sgx-node-1",
+      "sev_node": "i-011c91b6513c9a499",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097468.60303,
+      "end_time": 1745097473.295632,
+      "duration": 4.692601919174194
+    },
+    {
+      "sgx_node": "i-00e38fb76e0e77bb6",
+      "sev_node": "sev-node-1",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097473.2957282,
+      "end_time": 1745097478.112787,
+      "duration": 4.817058801651001
+    },
+    {
+      "sgx_node": "i-00e38fb76e0e77bb6",
+      "sev_node": "i-011c91b6513c9a499",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": true,
+      "verified": true,
+      "sgx_result": 64,
+      "sev_result": 64,
+      "start_time": 1745097478.112871,
+      "end_time": 1745097482.465051,
+      "duration": 4.352180004119873
+    }
+  ]
+}

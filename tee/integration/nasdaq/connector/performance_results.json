@@ -1,0 +1,25 @@
+{
+  "total_time": 27.607173681259155,
+  "total_messages": 100000,
+  "overall_tps": 3622.2469259098393,
+  "length_prefixed_tps": 4147.472564687478,
+  "direct_tps": 3215.5335351853078,
+  "stats": {
+    "messages_processed": 200000,
+    "messages_per_node": {
+      "i-081ae726b8eebc482": 25000,
+      "i-0600a681a918ebcb7": 25000,
+      "i-066491a2fc0856d81": 25000,
+      "i-020abb3c8b81087a5": 25000
+    },
+    "parameters_validated": 100000,
+    "attestations_verified": 24,
+    "format_type_counts": {
+      "length-prefixed": 50000,
+      "direct": 50000
+    },
+    "processing_time_ms": 113263.70143890381,
+    "verification_time_ms": 112996.56629562378,
+    "throughput": 3215.5335351853078
+  }
+}

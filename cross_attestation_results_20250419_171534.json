@@ -1,0 +1,66 @@
+{
+  "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+  "parameter_format": "length-prefixed",
+  "test_time": "20250419_171534",
+  "total_pairs": 4,
+  "successful_pairs": 0,
+  "verified_pairs": 0,
+  "results": [
+    {
+      "sgx_node": "sgx-node-1",
+      "sev_node": "sev-node-1",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": false,
+      "verified": false,
+      "sgx_result": null,
+      "sev_result": null,
+      "start_time": 1745097330.338015,
+      "end_time": 1745097331.426474,
+      "duration": 1.0884590148925781,
+      "error": "Failed to upload parameters to SGX node"
+    },
+    {
+      "sgx_node": "sgx-node-1",
+      "sev_node": "i-011c91b6513c9a499",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": false,
+      "verified": false,
+      "sgx_result": null,
+      "sev_result": null,
+      "start_time": 1745097331.426502,
+      "end_time": 1745097332.1914072,
+      "duration": 0.7649052143096924,
+      "error": "Failed to upload parameters to SGX node"
+    },
+    {
+      "sgx_node": "i-00e38fb76e0e77bb6",
+      "sev_node": "sev-node-1",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": false,
+      "verified": false,
+      "sgx_result": null,
+      "sev_result": null,
+      "start_time": 1745097332.191446,
+      "end_time": 1745097333.305205,
+      "duration": 1.1137590408325195,
+      "error": "Failed to upload parameters to SGX node"
+    },
+    {
+      "sgx_node": "i-00e38fb76e0e77bb6",
+      "sev_node": "i-011c91b6513c9a499",
+      "contract_id": "748775a3a2076c1ae990e94755e63bcb",
+      "parameter_format": "length-prefixed",
+      "success": false,
+      "verified": false,
+      "sgx_result": null,
+      "sev_result": null,
+      "start_time": 1745097333.305226,
+      "end_time": 1745097334.0525482,
+      "duration": 0.7473220825195312,
+      "error": "Failed to upload parameters to SGX node"
+    }
+  ]
+}
