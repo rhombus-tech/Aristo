@@ -19,6 +19,7 @@ require (
 )
 
 require (
+	github.com/bytecodealliance/wasmtime-go v1.0.0 // indirect
 	github.com/dsnet/compress v0.0.0-20171208185109-cc9eb1d7ad76 // indirect
 	github.com/gabstv/go-bsdiff v1.0.5 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect

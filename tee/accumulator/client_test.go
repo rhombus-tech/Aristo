@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	pb "github.com/rhombus-tech/vm/tee/proto"
 )
 
 func TestAccumulatorClient(t *testing.T) {
@@ -36,10 +38,19 @@ func TestAccumulatorClient(t *testing.T) {
 	}
 	
 	// Test with a modified witness that should fail verification
-	invalidWitness := *witness
-	invalidWitness.Value[0] = witness.Value[0] + 1 // Change the hash value
+	// Create a new witness rather than copying to avoid copying mutex
+	invalidWitness := &pb.AccumulatorWitness{
+		Element:        witness.Element,
+		Value:          append([]byte{}, witness.Value...),
+		LastAccumulator: witness.LastAccumulator,
+		LastUpdate:     witness.LastUpdate,
+	}
+	// Modify the value to make it invalid
+	if len(invalidWitness.Value) > 0 {
+		invalidWitness.Value[0]++
+	}
 	
-	valid, err = client.VerifyWitness(&invalidWitness, true)
+	valid, err = client.VerifyWitness(invalidWitness, true)
 	if err == nil {
 		t.Error("Expected error when verifying invalid witness")
 	}
@@ -59,10 +70,15 @@ func TestAccumulatorClient(t *testing.T) {
 	}
 	
 	// Test with an old witness
-	oldWitness := *witness
-	oldWitness.LastUpdate = uint64(time.Now().AddDate(0, 0, -2).Unix()) // 2 days old
+	// Create a new witness rather than copying to avoid copying mutex
+	oldWitness := &pb.AccumulatorWitness{
+		Element:        witness.Element,
+		Value:          append([]byte{}, witness.Value...),
+		LastAccumulator: witness.LastAccumulator,
+		LastUpdate:     uint64(time.Now().AddDate(0, 0, -2).Unix()), // 2 days old
+	}
 	
-	valid, err = client.VerifyWitness(&oldWitness, true)
+	valid, err = client.VerifyWitness(oldWitness, true)
 	if err == nil {
 		t.Error("Expected error when verifying old witness")
 	}
