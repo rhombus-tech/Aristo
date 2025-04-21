@@ -1,0 +1,35 @@
+{
+  "timestamp": "2025-04-20T20:23:41Z",
+  "message_count": 10,
+  "batch_size": 5,
+  "message_size_bytes": 630,
+  "node_status": {
+    "sgx_nodes": [],
+    "sev_nodes": []
+  },
+  "formats_tested": [
+    "length-prefixed",
+    "direct"
+  ],
+  "overall_stats": {},
+  "security_stats": {
+    "attestations_verified": 0,
+    "attestation_percentage": 0.0,
+    "format_confusion_prevented": 0,
+    "buffer_overflow_prevented": 0
+  },
+  "length_prefixed": {
+    "tps": 95.51003306402397,
+    "success_rate": 0,
+    "attestation_verified": 0
+  },
+  "direct": {
+    "tps": 98.95703914819123,
+    "success_rate": 0
+  },
+  "cross_attestation": {
+    "verified": false,
+    "time_seconds": 2.4848458766937256,
+    "security_notes": "Cross-attestation requires matching results from both SGX/SEV platforms"
+  }
+}

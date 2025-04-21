@@ -1,0 +1,23 @@
+{
+  "listen_address": "0.0.0.0:7070",
+  "tee_type": "PLACEHOLDER_TYPE",
+  "node_id": "PLACEHOLDER_ID",
+  "partner_tee": {
+    "ip": "PLACEHOLDER_PARTNER_IP",
+    "tee_type": "PLACEHOLDER_PARTNER_TYPE",
+    "port": 7070
+  },
+  "region_id": "us-east-1",
+  "parameter_validation": {
+    "length_prefixed": true,
+    "direct_format": true,
+    "max_size": 1024,
+    "format_detection": true
+  },
+  "accumulator": {
+    "size_bytes": 32,
+    "batch_size": 1000,
+    "threads": 8
+  },
+  "direct_pairing": true
+}

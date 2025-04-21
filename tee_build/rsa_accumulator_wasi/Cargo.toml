@@ -1,0 +1,15 @@
+[package]
+name = "rsa_accumulator_wasi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+num-bigint = { version = "0.4", features = ["rand"] }
+num-traits = "0.2"
+num-integer = "0.1"
+sha2 = "0.10"
+rand = "0.8"
+getrandom = { version = "0.2", features = ["js"] }

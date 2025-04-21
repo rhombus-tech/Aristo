@@ -1,0 +1,14 @@
+[Unit]
+Description=TEE Execution Controller
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rhombus/execution
+ExecStart=/opt/rhombus/execution/bin/controller --config /opt/rhombus/execution/config/controller_config.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

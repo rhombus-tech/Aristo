@@ -1,0 +1,177 @@
+{
+  "node_tests": [
+    {
+      "node_type": "SGX",
+      "ip": "localhost",
+      "implementation": "Go",
+      "length_prefixed_stats": {
+        "min": 0.73,
+        "max": 10.82,
+        "avg": 1.4806666666666666,
+        "median": 1.0550000000000002
+      },
+      "direct_format_stats": {
+        "min": 0.61,
+        "max": 1.45,
+        "avg": 0.748,
+        "median": 0.72
+      },
+      "raw_results": [
+        {
+          "success": true,
+          "node_type": "SGX",
+          "implementation": "Go",
+          "format": "length-prefixed",
+          "elapsed_ms": 10.82,
+          "result": {
+            "success": true,
+            "format": "length-prefixed",
+            "bytes_processed": 32,
+            "validation": "passed",
+            "implementation": "Go"
+          }
+        },
+        {
+          "success": true,
+          "node_type": "SGX",
+          "implementation": "Go",
+          "format": "length-prefixed",
+          "elapsed_ms": 1.63,
+          "result": {
+            "success": true,
+            "format": "length-prefixed",
+            "bytes_processed": 32,
+            "validation": "passed",
+            "implementation": "Go"
+          }
+        }
+      ]
+    },
+    {
+      "node_type": "SEV",
+      "ip": "localhost",
+      "implementation": "Rust",
+      "length_prefixed_stats": {
+        "min": 0.65,
+        "max": 3.66,
+        "avg": 0.9083333333333333,
+        "median": 0.755
+      },
+      "direct_format_stats": {
+        "min": 0.59,
+        "max": 1.11,
+        "avg": 0.7573333333333333,
+        "median": 0.75
+      },
+      "raw_results": [
+        {
+          "success": true,
+          "node_type": "SEV",
+          "implementation": "Rust",
+          "format": "length-prefixed",
+          "elapsed_ms": 3.66,
+          "result": {
+            "success": true,
+            "format": "length-prefixed",
+            "bytes_processed": 32,
+            "validation": "passed",
+            "implementation": "Rust"
+          }
+        },
+        {
+          "success": true,
+          "node_type": "SEV",
+          "implementation": "Rust",
+          "format": "length-prefixed",
+          "elapsed_ms": 0.88,
+          "result": {
+            "success": true,
+            "format": "length-prefixed",
+            "bytes_processed": 32,
+            "validation": "passed",
+            "implementation": "Rust"
+          }
+        }
+      ]
+    }
+  ],
+  "cross_platform_test": {
+    "success": true,
+    "cross_platform_validation": {
+      "length-prefixed": {
+        "sgx": {
+          "success": true,
+          "node_type": "SGX",
+          "implementation": "Go",
+          "format": "length-prefixed",
+          "elapsed_ms": 0.84,
+          "result": {
+            "success": true,
+            "format": "length-prefixed",
+            "bytes_processed": 269,
+            "validation": "passed",
+            "implementation": "Go"
+          }
+        },
+        "sev": {
+          "success": true,
+          "node_type": "SEV",
+          "implementation": "Rust",
+          "format": "length-prefixed",
+          "elapsed_ms": 0.78,
+          "result": {
+            "success": true,
+            "format": "length-prefixed",
+            "bytes_processed": 269,
+            "validation": "passed",
+            "implementation": "Rust"
+          }
+        },
+        "match": true
+      },
+      "direct": {
+        "sgx": {
+          "success": true,
+          "node_type": "SGX",
+          "implementation": "Go",
+          "format": "direct",
+          "elapsed_ms": 0.73,
+          "result": {
+            "success": true,
+            "format": "direct",
+            "bytes_processed": 269,
+            "validation": "passed",
+            "implementation": "Go"
+          }
+        },
+        "sev": {
+          "success": true,
+          "node_type": "SEV",
+          "implementation": "Rust",
+          "format": "direct",
+          "elapsed_ms": 0.84,
+          "result": {
+            "success": true,
+            "format": "direct",
+            "bytes_processed": 269,
+            "validation": "passed",
+            "implementation": "Rust"
+          }
+        },
+        "match": true
+      }
+    },
+    "summary": {
+      "length_prefixed_match": true,
+      "direct_match": true,
+      "overall_success": true
+    }
+  },
+  "timestamp": 1745187101.773222,
+  "summary": {
+    "sgx_nodes_tested": 1,
+    "sev_nodes_tested": 1,
+    "all_formats_supported": true,
+    "cross_platform_validation": true
+  }
+}

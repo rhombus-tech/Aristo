@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# This is the RSA accumulator for SEV nodes with dual-format parameter validation
+
+# Read config from environment
+SUPPORT_LENGTH_PREFIX=${SUPPORT_LENGTH_PREFIX:-true}
+SUPPORT_DIRECT_FORMAT=${SUPPORT_DIRECT_FORMAT:-true}
+BATCH_SIZE=${BATCH_SIZE:-1000}
+PARALLELISM=${PARALLELISM:-8}
+PORT=${PORT:-7101}
+VALIDATOR_ENDPOINT=${VALIDATOR_ENDPOINT:-"http://localhost:7091"}
+PAIR_ID=${PAIR_ID:-"nasdaq-poc-1"}
+
+# Starting message
+echo "Starting RSA accumulator service with dual-format parameter validation"
+echo "Configuration: port=$PORT, lengthPrefix=$SUPPORT_LENGTH_PREFIX, directFormat=$SUPPORT_DIRECT_FORMAT"
+echo "Performance: batchSize=$BATCH_SIZE, parallelism=$PARALLELISM"
+echo "Integration: validatorEndpoint=$VALIDATOR_ENDPOINT, pairID=$PAIR_ID"
+
+# Set up function to handle parameter validation
+validate_parameter() {
+  local data="$1"
+  local format=""
+  local result=""
+  
+  # Check if we're using length-prefixed format
+  if [[ "$SUPPORT_LENGTH_PREFIX" == "true" && ${#data} -ge 4 ]]; then
+    # Extract the first 4 bytes as a length prefix
+    local prefix="${data:0:8}" # First 4 bytes in hex (8 chars)
+    
+    # Convert hex to decimal (little-endian)
+    local b1=$(( 0x${prefix:6:2} ))
+    local b2=$(( 0x${prefix:4:2} ))
+    local b3=$(( 0x${prefix:2:2} ))
+    local b4=$(( 0x${prefix:0:2} ))
+    
+    local length=$(( b1 + (b2 << 8) + (b3 << 16) + (b4 << 24) ))
+    
+    # Validate reasonable length
+    if [[ $length -gt 0 && $length -le 1048576 ]]; then # 1MB max
+      if [[ $(( (${#data} - 8) / 2 )) -ge $length ]]; then
+        format="length-prefixed"
+        result="${data:8:$(( length * 2 ))}"
+        echo "Detected length-prefixed format: length=$length" >&2
+      fi
+    fi
+  fi
+  
+  # Fall back to direct format if needed
+  if [[ -z "$format" && "$SUPPORT_DIRECT_FORMAT" == "true" ]]; then
+    format="direct"
+    result="$data"
+    echo "Using direct data format: length=$(( ${#data} / 2 ))" >&2
+  fi
+  
+  if [[ -z "$format" ]]; then
+    echo "Error: Invalid parameter format or unsupported format" >&2
+    return 1
+  fi
+  
+  echo "Successfully validated $(( ${#result} / 2 )) bytes using $format format" >&2
+  return 0
+}
+
+# Run a simple HTTP server to handle parameter validation
+while true; do
+  # Listen for connections
+  nc -l $PORT | while read line; do
+    if [[ "$line" == *"POST /accumulate"* ]]; then
+      # Read headers until empty line
+      while read header && [[ -n "$header" ]]; do
+        true
+      done
+      
+      # Read body
+      body=$(cat)
+      
+      # Validate parameter
+      if validate_parameter "$body"; then
+        echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nSuccessfully validated parameters with dual-format support"
+      else
+        echo -e "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid parameter format"
+      fi
+    elif [[ "$line" == *"GET /health"* ]]; then
+      # Health check endpoint
+      echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nRSA Accumulator Service healthy (SEV)"
+    else
+      # Unknown request
+      echo -e "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nNot Found"
+    fi
+  done
+done

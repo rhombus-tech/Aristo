@@ -1,0 +1,25 @@
+{
+  "pair_id": 1,
+  "region_id": "us-east-1",
+  "sgx_node": {
+    "ip": "54.224.222.120",
+    "tee_type": "IntelSGX",
+    "port": 7070
+  },
+  "sev_node": {
+    "ip": "3.91.253.73",
+    "tee_type": "SEV",
+    "port": 7070
+  },
+  "cross_attestation": {
+    "enabled": true,
+    "accumulator_size": 32,
+    "verification_ms_target": 100
+  },
+  "parameter_validation": {
+    "length_prefixed": true,
+    "direct_format": true,
+    "max_size": 1024,
+    "format_detection": true
+  }
+}

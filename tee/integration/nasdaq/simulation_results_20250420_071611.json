@@ -1,0 +1,117 @@
+{
+  "success": true,
+  "processed_count": 100000,
+  "elapsed_seconds": 5.542139053344727,
+  "overall_tps": 18043.574698770717,
+  "target_met": false,
+  "node_stats": [
+    {
+      "node_id": "nasdaq-node-1",
+      "tee_type": "SGX",
+      "processed_count": 8360,
+      "elapsed_seconds": 5.543594837188721,
+      "transactions_per_second": 1508.046717973989,
+      "batch_size": 1000,
+      "region": "region-1"
+    },
+    {
+      "node_id": "nasdaq-node-2",
+      "tee_type": "SEV",
+      "processed_count": 8236,
+      "elapsed_seconds": 5.5434770584106445,
+      "transactions_per_second": 1485.71012619313,
+      "batch_size": 1000,
+      "region": "region-1"
+    },
+    {
+      "node_id": "nasdaq-node-3",
+      "tee_type": "SGX",
+      "processed_count": 8375,
+      "elapsed_seconds": 5.543355941772461,
+      "transactions_per_second": 1510.8176505299666,
+      "batch_size": 1000,
+      "region": "region-2"
+    },
+    {
+      "node_id": "nasdaq-node-4",
+      "tee_type": "SEV",
+      "processed_count": 8233,
+      "elapsed_seconds": 5.543267011642456,
+      "transactions_per_second": 1485.22522597384,
+      "batch_size": 1000,
+      "region": "region-2"
+    },
+    {
+      "node_id": "nasdaq-node-5",
+      "tee_type": "SGX",
+      "processed_count": 8309,
+      "elapsed_seconds": 5.5431859493255615,
+      "transactions_per_second": 1498.95747246418,
+      "batch_size": 1000,
+      "region": "region-3"
+    },
+    {
+      "node_id": "nasdaq-node-6",
+      "tee_type": "SEV",
+      "processed_count": 8375,
+      "elapsed_seconds": 5.543069124221802,
+      "transactions_per_second": 1510.8958254558618,
+      "batch_size": 1000,
+      "region": "region-3"
+    },
+    {
+      "node_id": "nasdaq-node-7",
+      "tee_type": "SGX",
+      "processed_count": 8220,
+      "elapsed_seconds": 5.542930841445923,
+      "transactions_per_second": 1482.9699729494982,
+      "batch_size": 1000,
+      "region": "region-4"
+    },
+    {
+      "node_id": "nasdaq-node-8",
+      "tee_type": "SEV",
+      "processed_count": 8333,
+      "elapsed_seconds": 5.542814016342163,
+      "transactions_per_second": 1503.3879858554496,
+      "batch_size": 1000,
+      "region": "region-4"
+    },
+    {
+      "node_id": "nasdaq-node-9",
+      "tee_type": "SGX",
+      "processed_count": 8349,
+      "elapsed_seconds": 5.5427350997924805,
+      "transactions_per_second": 1506.2960523429283,
+      "batch_size": 1000,
+      "region": "region-5"
+    },
+    {
+      "node_id": "nasdaq-node-10",
+      "tee_type": "SEV",
+      "processed_count": 8273,
+      "elapsed_seconds": 5.542672157287598,
+      "transactions_per_second": 1492.601359999711,
+      "batch_size": 1000,
+      "region": "region-5"
+    },
+    {
+      "node_id": "nasdaq-node-11",
+      "tee_type": "SGX",
+      "processed_count": 8422,
+      "elapsed_seconds": 5.54258918762207,
+      "transactions_per_second": 1519.506446338896,
+      "batch_size": 1000,
+      "region": "region-6"
+    },
+    {
+      "node_id": "nasdaq-node-12",
+      "tee_type": "SEV",
+      "processed_count": 8515,
+      "elapsed_seconds": 5.542507171630859,
+      "transactions_per_second": 1536.3083413917348,
+      "batch_size": 1000,
+      "region": "region-6"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "timestamp": "2025-04-20T21:06:52Z",
+  "message_count": 5,
+  "batch_size": 8,
+  "message_size_bytes": 631,
+  "node_status": [
+    {
+      "node_id": "custom-sgx",
+      "status": "available",
+      "contracts_available": false,
+      "execution_api_available": true,
+      "direct_socket": true,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "custom-sev",
+      "status": "available",
+      "contracts_available": false,
+      "execution_api_available": true,
+      "direct_socket": true,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "sgx-node-1",
+      "status": "available",
+      "contracts_available": false,
+      "execution_api_available": true,
+      "direct_socket": true,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "sev-node-1",
+      "status": "available",
+      "contracts_available": false,
+      "execution_api_available": true,
+      "direct_socket": true,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "available",
+      "contracts_available": false,
+      "execution_api_available": true,
+      "direct_socket": true,
+      "error": "no_contracts_found"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "available",
+      "contracts_available": false,
+      "execution_api_available": true,
+      "direct_socket": true,
+      "error": "no_contracts_found"
+    }
+  ],
+  "formats_tested": [
+    "length-prefixed",
+    "direct"
+  ],
+  "overall_stats": {},
+  "security_stats": {
+    "attestations_verified": 0,
+    "attestation_percentage": 0.0,
+    "format_confusion_prevented": 0,
+    "buffer_overflow_prevented": 0
+  },
+  "length_prefixed": {
+    "tps": 0.7904625785689051,
+    "success_rate": 0,
+    "attestation_verified": 0
+  },
+  "direct": {
+    "tps": 47.09156028607677,
+    "success_rate": 0
+  },
+  "cross_attestation": {
+    "verified": false,
+    "time_seconds": 0.003940105438232422,
+    "security_notes": "Cross-attestation requires matching results from both SGX/SEV platforms"
+  }
+}

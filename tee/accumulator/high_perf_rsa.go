@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -24,6 +25,10 @@ type HighPerfRsaClient struct {
 	modulus  *big.Int
 	exponent *big.Int  // public exponent, typically 65537
 	current  *big.Int  // current accumulator value
+	
+	// Parameter format support
+	supportLengthPrefix bool   // Support length-prefixed format (4-byte length + data)
+	supportDirectFormat bool   // Support direct format (no length prefix)
 
 	// Performance optimization settings
 	batchSize       int           // Number of elements per batch
@@ -63,30 +68,30 @@ type HighPerfWitness struct {
 
 // HighPerfRsaOptions configures the high-performance RSA client
 type HighPerfRsaOptions struct {
-	BatchSize       int           // Size of batches, higher = better throughput
-	Parallelism     int           // Number of parallel workers
-	AsyncEnabled    bool          // Whether to enable async processing
-	BatchTimeout    time.Duration // Max time to wait before processing a batch
-	ModulusBits     int           // Size of RSA modulus in bits
-	Region          string        // Region this client belongs to
-	ParentClient    *HighPerfRsaClient // Parent in hierarchical setup
+	BatchSize           int
+	Parallelism         int
+	AsyncEnabled        bool
+	BatchTimeout        time.Duration
+	ModulusBits         int
+	Region              string
+	ParentClient        *HighPerfRsaClient
+	SupportLengthPrefix bool  // Support 4-byte length-prefixed format
+	SupportDirectFormat bool  // Support direct data format without length prefix
 }
 
 // DefaultHighPerfOptions returns optimized default options
 func DefaultHighPerfOptions() HighPerfRsaOptions {
-	// Calculate optimal parallelism based on system
 	cpus := runtime.NumCPU()
-	parallelism := cpus
-	if parallelism < 2 {
-		parallelism = 2
-	}
-
 	return HighPerfRsaOptions{
-		BatchSize:     1000,                  // Large batches for throughput
-		Parallelism:   parallelism,           // Use all available cores
-		AsyncEnabled:  true,                  // Async for better throughput
-		BatchTimeout:  100 * time.Millisecond, // Frequent batch processing
-		ModulusBits:   2048,                  // Standard RSA security
+		BatchSize:           1000,
+		Parallelism:         cpus,
+		AsyncEnabled:        true,
+		BatchTimeout:        200 * time.Millisecond,
+		ModulusBits:         2048,
+		Region:              "us-east-1",
+		ParentClient:        nil,
+		SupportLengthPrefix: true,  // Enable length-prefixed format by default
+		SupportDirectFormat: true,  // Enable direct format by default
 	}
 }
 
@@ -106,22 +111,25 @@ func NewHighPerfRsaClient(teeID, teeType string, opts ...HighPerfRsaOptions) (*H
 	// Use fixed public exponent (standard for RSA)
 	exponent := big.NewInt(65537)
 
+	// Initialize the client from options
 	client := &HighPerfRsaClient{
-		teeID:        teeID,
-		teeType:      teeType,
-		region:       options.Region,
-		modulus:      modulus,
-		exponent:     exponent,
-		current:      big.NewInt(2), // Start with value 2
-		batchSize:    options.BatchSize,
-		parallelism:  options.Parallelism,
-		asyncEnabled: options.AsyncEnabled,
-		batchTimeout: options.BatchTimeout,
-		batchBuffer:  make([]*pb.AccumulatorElement, 0, options.BatchSize),
-		witnessCache: make(map[string]*HighPerfWitness),
-		lastUpdate:   time.Now(),
-		parentClient: options.ParentClient,
-		tpsHistory:   make([]float64, 0, 20),
+		teeID:             teeID,
+		teeType:           teeType,
+		region:            options.Region,
+		modulus:           modulus,
+		exponent:          exponent,
+		current:           big.NewInt(2), // Start with value 2
+		batchSize:         options.BatchSize,
+		parallelism:       options.Parallelism,
+		asyncEnabled:      options.AsyncEnabled,
+		batchTimeout:      options.BatchTimeout,
+		batchBuffer:       make([]*pb.AccumulatorElement, 0, options.BatchSize),
+		witnessCache:      make(map[string]*HighPerfWitness),
+		lastUpdate:        time.Now(),
+		parentClient:      options.ParentClient,
+		tpsHistory:        make([]float64, 0, 10),
+		supportLengthPrefix: options.SupportLengthPrefix,
+		supportDirectFormat: options.SupportDirectFormat,
 	}
 
 	// Start async processor if enabled
@@ -177,6 +185,7 @@ func (c *HighPerfRsaClient) asyncBatchProcessor() {
 }
 
 // AddElement adds a single element to the accumulator
+// Supports both length-prefixed and direct parameter formats
 func (c *HighPerfRsaClient) AddElement(element *pb.AccumulatorElement) {
 	if c.asyncEnabled {
 		// Fast path: directly send to channel when possible
@@ -188,9 +197,16 @@ func (c *HighPerfRsaClient) AddElement(element *pb.AccumulatorElement) {
 		}
 	}
 
+	// Validate element parameters using dual-format support
+	validatedElement, err := c.ValidateElementParameters(element)
+	if err != nil {
+		fmt.Printf("Invalid element parameters: %v\n", err)
+		return
+	}
+	
 	// Add to batch buffer using mutex
 	c.batchMutex.Lock()
-	c.batchBuffer = append(c.batchBuffer, element)
+	c.batchBuffer = append(c.batchBuffer, validatedElement)
 
 	// Process immediately if batch is full
 	if len(c.batchBuffer) >= c.batchSize {
@@ -207,6 +223,7 @@ func (c *HighPerfRsaClient) AddElement(element *pb.AccumulatorElement) {
 }
 
 // AddBatch adds multiple elements in one call for efficiency
+// Supports both length-prefixed and direct parameter formats
 func (c *HighPerfRsaClient) AddBatch(elements []*pb.AccumulatorElement) {
 	if len(elements) == 0 {
 		return
@@ -721,37 +738,26 @@ func (c *HighPerfRsaClient) GetPerformanceStats() map[string]interface{} {
 	c.batchMutex.RLock()
 	defer c.batchMutex.RUnlock()
 	
-	// Calculate average TPS
-	var avgTPS float64
+	// Calculate TPS over recent history
+	tpsAvg := 0.0
 	if len(c.tpsHistory) > 0 {
-		sum := 0.0
 		for _, tps := range c.tpsHistory {
-			sum += tps
+			tpsAvg += tps
 		}
-		avgTPS = sum / float64(len(c.tpsHistory))
+		tpsAvg /= float64(len(c.tpsHistory))
 	}
 	
-	// Estimate maximum TPS based on batch size and processing time
-	// This is a theoretical upper bound based on optimizations
-	estimatedMaxTPS := float64(c.batchSize) * float64(1000) / float64(10)  // Assumes 10ms per batch
-	
-	// Projected TPS with 40 node pairs
-	projectedTPS := avgTPS * 40
-	
 	return map[string]interface{}{
-		"tee_id":             c.teeID,
-		"tee_type":           c.teeType,
-		"region":             c.region,
-		"batch_count":        c.batchCount,
-		"verify_count":       c.verifyCount,
-		"batch_size":         c.batchSize,
-		"parallelism":        c.parallelism,
-		"witness_cache_size": len(c.witnessCache),
-		"current_batch_size": len(c.batchBuffer),
-		"last_update":        c.lastUpdate.Format(time.RFC3339),
-		"avg_tps":            avgTPS,
-		"estimated_max_tps":  estimatedMaxTPS,
-		"projected_tps_40_nodes": projectedTPS,
+		"verify_count": c.verifyCount,
+		"batch_count":  c.batchCount,
+		"tps":          tpsAvg,
+		"batch_size":   c.batchSize,
+		"parallelism":  c.parallelism,
+		"async":        c.asyncEnabled,
+		"measurement_formats": map[string]bool{
+			"length_prefixed": c.supportLengthPrefix,
+			"direct":         c.supportDirectFormat,
+		},
 	}
 }
 
@@ -782,4 +788,73 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ParseDualFormatParameters handles dual-format parameter validation
+// Supporting both length-prefixed (4-byte little-endian u32 + data) and direct formats
+// Returns: parsed data, format used, and error if any
+func ParseDualFormatParameters(data []byte, supportLengthPrefix, supportDirectFormat bool) ([]byte, string, error) {
+	// Quick validation for empty data
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("empty parameter data")
+	}
+	
+	// If data length < 4 bytes, can't be length-prefixed
+	if len(data) < 4 {
+		if supportDirectFormat {
+			return data, "direct", nil
+		}
+		return nil, "", fmt.Errorf("data too short for length prefix and direct format not supported")
+	}
+	
+	// Try to interpret first 4 bytes as length prefix
+	if supportLengthPrefix {
+		length := binary.LittleEndian.Uint32(data[:4])
+		
+		// Validate length prefix is reasonable and matches the data
+		// The length should be between 0 and 1MB and match the actual data length minus prefix
+		if length > 0 && length <= 1024*1024 && length == uint32(len(data)-4) {
+			return data[4:], "length-prefixed", nil
+		}
+	}
+	
+	// No valid length prefix or length-prefix not supported, use direct format
+	if supportDirectFormat {
+		return data, "direct", nil
+	}
+	
+	return nil, "", fmt.Errorf("invalid parameter format: not a valid length prefix and direct format not supported")
+}
+
+// ValidateElementParameters validates the measurement data in an accumulator element
+// using the dual-format detection and validation logic
+func (c *HighPerfRsaClient) ValidateElementParameters(element *pb.AccumulatorElement) (*pb.AccumulatorElement, error) {
+	if element == nil {
+		return nil, fmt.Errorf("nil accumulator element")
+	}
+	
+	// Parse the measurement data using the dual-format logic
+	parsedData, format, err := ParseDualFormatParameters(
+		element.Measurement, 
+		c.supportLengthPrefix, 
+		c.supportDirectFormat,
+	)
+	
+	if err != nil {
+		return nil, fmt.Errorf("measurement validation failed: %w", err)
+	}
+	
+	// Create a new element with the validated measurement
+	validatedElement := &pb.AccumulatorElement{
+		Executor:    element.Executor,
+		Measurement: parsedData,
+		EnclaveType: element.EnclaveType,
+		Timestamp:   element.Timestamp,
+	}
+	
+	// Log the format used for debugging
+	fmt.Printf("Processed element from %s using %s format\n", 
+		element.Executor, format)
+	
+	return validatedElement, nil
 }

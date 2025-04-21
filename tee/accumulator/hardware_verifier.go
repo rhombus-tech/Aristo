@@ -104,8 +104,6 @@ func (h *HardwareVerifier) Bootstrap() error {
 	case <-time.After(5 * time.Second):
 		return fmt.Errorf("bootstrap timed out")
 	}
-	
-	return nil
 }
 
 // bootstrapSGX performs the initial SGX attestation using DCAP

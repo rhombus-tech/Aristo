@@ -1,0 +1,39 @@
+{
+  "deployment": {
+    "batch_size": 1000,
+    "enable_async": true,
+    "parallelism": 8,
+    "verify_timeout_ms": 100,
+    "benchmark_mode": false
+  },
+  "nasdaq_connector": {
+    "batch_timeout_ms": 50,
+    "worker_threads": 16,
+    "target_tps": 50000,
+    "market_data": {
+      "source": "nasdaq_itch",
+      "feed_type": "multicast",
+      "channels": ["A", "B"],
+      "replay_enabled": true
+    },
+    "monitoring": {
+      "enable_prometheus": true,
+      "metrics_port": 9090,
+      "log_level": "info"
+    }
+  },
+  "nodes": {
+    "sgx": {
+      "count": 6,
+      "instance_type": "c5a.xlarge",
+      "memory_mb": 8192,
+      "vcpus": 4
+    },
+    "sev": {
+      "count": 6,
+      "instance_type": "c6a.2xlarge",
+      "memory_mb": 16384,
+      "vcpus": 8
+    }
+  }
+}

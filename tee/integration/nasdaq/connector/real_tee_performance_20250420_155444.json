@@ -1,0 +1,47 @@
+{
+  "error": "No TEE nodes available",
+  "node_status": [
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.88.167.91 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.93.178.107 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "sgx-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.84.125.9 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "sev-node-1",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 34.224.71.190 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "i-00e38fb76e0e77bb6",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.88.167.91 port 22: Operation timed out\n"
+    },
+    {
+      "node_id": "i-011c91b6513c9a499",
+      "status": "unavailable",
+      "reason": "tee_service_not_running",
+      "stdout": "",
+      "stderr": "ssh: connect to host 3.93.178.107 port 22: Operation timed out\n"
+    }
+  ]
+}

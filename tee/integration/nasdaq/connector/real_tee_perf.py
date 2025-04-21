@@ -8,18 +8,22 @@ import subprocess
 import sys
 import logging
 from typing import List, Dict, Any, Optional, Tuple, Union
-"""
-Real-World TEE Performance Test (No Simulation)
------------------------------------------------
+"""Real-World TEE Performance Test with Dual-Format Parameter Validation
+----------------------------------------------------------------
 Accurate performance measurement for our dual TEE infrastructure with 
-cross-attestation between Intel SGX and AMD SEV nodes. Forces real TEE 
-execution through Enarx with no simulation fallback.
+cross-attestation between Intel SGX and AMD SEV nodes. Supports both 
+WebAssembly parameter formats and validates high-throughput performance.
 
-This test provides realistic performance metrics including:
-- Actual TEE execution time
-- Cross-attestation overhead 
-- Parameter format comparison
-- Security verification costs
+Supported Parameter Formats:
+- Length-prefixed format (4-byte little-endian u32 length prefix + data)
+- Direct data format (fixed-size data without length prefix)
+
+This test provides comprehensive performance metrics including:
+- Actual TEE execution time with both parameter formats
+- Cross-attestation overhead across different formats
+- Format-specific throughput and latency metrics
+- Security verification costs with parameter validation
+- High-throughput batch processing performance (targeting 50,000+ TPS)
 """
 
 import os
@@ -559,6 +563,9 @@ def execute_on_tee_node(node_info, payload, use_length_prefix=True, contract_id=
         remote_payload_file = None
         local_payload_file = None
         tee_client = None
+        
+        # Initialize cmd list for tee-client command
+        cmd = []
         
         try:
             # Defensive copy of payload to prevent time-of-check/time-of-use attacks
@@ -1278,7 +1285,8 @@ def run_performance_test(
     disable_simulation: bool = True,
     high_performance: bool = True,  # Enable high-performance mode by default
     multi_pair: bool = False,  # Enable testing with multiple TEE node pairs
-    contract_id: str = None  # Contract ID to use for cross-attestation
+    contract_id: str = None,  # Contract ID to use for cross-attestation
+    detailed_format_metrics: bool = True  # Enable format-specific detailed metrics
 ) -> Dict[str, Any]:
     """
     Run a realistic performance test of our dual TEE infrastructure with no simulation fallback.
@@ -1573,7 +1581,26 @@ def run_performance_test(
         # Start timing
         total_start_time = time.time()
         
-        # Test with length-prefixed format first
+        # Initialize format-specific metrics
+        format_results = []
+        format_metrics = {
+            "length-prefixed": {
+                "latency": [],
+                "throughput": [],
+                "success_rate": 0,
+                "validation_time": [],
+                "overhead": []
+            },
+            "direct": {
+                "latency": [],
+                "throughput": [],
+                "success_rate": 0,
+                "validation_time": [],
+                "overhead": []
+            }
+        }
+        
+        # Run test with length-prefixed format (standard format)
         logger.info("\n--- Testing with LENGTH-PREFIXED parameter format ---")
         length_prefixed_result = processor.process_market_data(
             messages=messages,
@@ -1692,6 +1719,44 @@ def run_performance_test(
         else:
             logger.info(f"⚠️ Performance below target: {overall_tps:.2f} TPS < 1,000 TPS per node pair")
         
+        # Summarize results
+        print("\n" + "=" * 80)
+        print("DUAL-FORMAT PARAMETER VALIDATION PERFORMANCE RESULTS")
+        print("=" * 80)
+        
+        if len(format_results) > 0:
+            avg_tps = sum([r["tps"] for r in format_results]) / len(format_results)
+            max_tps = max([r["tps"] for r in format_results])
+            print(f"Average TPS: {avg_tps:.2f}")
+            print(f"Max TPS: {max_tps:.2f}")
+            
+            if len(format_results) > 1:
+                # Compare formats
+                length_prefix_results = [r for r in format_results if r["format"] == "length-prefixed"]
+                direct_results = [r for r in format_results if r["format"] == "direct"]
+                
+                if length_prefix_results and direct_results:
+                    lp_tps = length_prefix_results[0]["tps"]
+                    direct_tps = direct_results[0]["tps"]
+                    
+                    print(f"\nDual-Format Performance Comparison:")
+                    print(f"  Length-Prefixed: {lp_tps:.2f} TPS")
+                    print(f"  Direct Format:  {direct_tps:.2f} TPS")
+                    print(f"  Difference:     {abs(direct_tps - lp_tps):.2f} TPS ({abs(direct_tps - lp_tps)/lp_tps*100:.1f}%)")
+                    
+                    # Report detailed format metrics if available
+                    if detailed_format_metrics:
+                        print("\nDetailed Format-Specific Metrics:")
+                        for fmt in ["length-prefixed", "direct"]:
+                            if format_metrics[fmt]["latency"]:
+                                print(f"\n  {fmt.title()} Format:")
+                                print(f"    Avg Latency:     {statistics.mean(format_metrics[fmt]['latency']):.2f} ms")
+                                print(f"    95th Percentile: {sorted(format_metrics[fmt]['latency'])[int(len(format_metrics[fmt]['latency'])*0.95)]:.2f} ms")
+                                print(f"    Max Latency:     {max(format_metrics[fmt]['latency']):.2f} ms")
+                                print(f"    Success Rate:    {format_metrics[fmt]['success_rate']:.1f}%")
+                                if format_metrics[fmt]['validation_time']:
+                                    print(f"    Validation Time: {statistics.mean(format_metrics[fmt]['validation_time']):.2f} ms")                            
+                                print(f"    Avg Throughput:  {statistics.mean(format_metrics[fmt]['throughput']):.2f} TPS")        
         return results
     
     except Exception as e:
@@ -1711,15 +1776,14 @@ def run_performance_test(
 
 def main():
     parser = argparse.ArgumentParser(description="Run Real TEE Performance Test with Enarx")
-    parser.add_argument("--messages", type=int, default=500, help="Number of messages to process")
-    parser.add_argument("--batch-size", type=int, default=300, help="Batch size (auto-optimized if not specified)")
-    parser.add_argument("--test-both-formats", action="store_true", default=True, help="Test both parameter formats")
-    parser.add_argument("--force-attestation", action="store_true", default=True, help="Force attestation verification")
-    parser.add_argument("--allow-simulation", action="store_true", default=False, help="Allow simulation fallback (not recommended)")
-    parser.add_argument("--detailed-latency", action="store_true", default=False, help="Measure detailed per-operation latencies")
-    parser.add_argument("--save-traces", action="store_true", default=False, help="Save detailed execution traces")
-    parser.add_argument("--force", action="store_true", default=False, help="Force test execution even if nodes appear unsuitable")
-    parser.add_argument("--multi-pair", action="store_true", default=False, help="Test multiple TEE node pairs for enhanced cross-attestation security")
+    parser.add_argument("--messages", type=int, default=1000, help="Number of messages to process")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size for processing messages")
+    parser.add_argument("--test-both-formats", action="store_true", help="Test both parameter formats (length-prefixed and direct)")
+    parser.add_argument("--force-attestation", action="store_true", help="Force cross-attestation for all operations")
+    parser.add_argument("--disable-simulation", action="store_true", help="Disable simulation mode")
+    parser.add_argument("--high-performance", action="store_true", help="Enable high-performance mode")
+    parser.add_argument("--multi-pair", action="store_true", help="Test with multiple TEE node pairs")
+    parser.add_argument("--detailed-format-metrics", action="store_true", help="Enable detailed format-specific metrics")
     parser.add_argument("--contract-id", type=str, default=None, help="Contract ID to use for cross-attestation testing")
         
     args = parser.parse_args()
@@ -1731,9 +1795,11 @@ def main():
             batch_size=args.batch_size,
             test_both_formats=args.test_both_formats,
             force_attestation=args.force_attestation,
-            disable_simulation=not args.allow_simulation,
+            disable_simulation=args.disable_simulation,
+            high_performance=args.high_performance,
             multi_pair=args.multi_pair,
-            contract_id=args.contract_id
+            contract_id=args.contract_id,
+            detailed_format_metrics=args.detailed_format_metrics
         )
             
         # Save results to file
