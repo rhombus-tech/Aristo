@@ -1,0 +1,23 @@
+[Unit]
+Description=Accumulator Proxy with Enarx TEE Integration
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+ExecStart=/usr/local/bin/accumulator_proxy \
+  --port=7101 \
+  --enarx-path=/home/ubuntu/.enarx/bin/enarx \
+  --wasm-path=/home/ubuntu/rsa_accumulator.wasm \
+  --config-path=/home/ubuntu/enarx_config.toml \
+  --tee-type=${TEE_TYPE} \
+  --max-parameter-size=1024 \
+  --cross-validate=${ENABLE_CROSS_VAL}
+Environment=TEE_TYPE=sgx
+Environment=ENABLE_CROSS_VAL=true
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

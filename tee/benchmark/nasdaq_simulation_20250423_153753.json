@@ -1,0 +1,88 @@
+{
+  "timestamp": "2025-04-23T15:38:58.265377",
+  "configuration": {
+    "batch_size": 500,
+    "iterations": 200,
+    "concurrent_clients": 8,
+    "mode": "both",
+    "scenario": "volatile",
+    "volatility": 0.05,
+    "total_duration_sec": 59.754575967788696
+  },
+  "sgx_aggregate": {
+    "node_count": 2,
+    "total_transactions": 238500,
+    "total_errors": 3,
+    "avg_tps": 2154.1098038122154,
+    "avg_latency_ms": 1238.106867092571
+  },
+  "sev_aggregate": {
+    "node_count": 2,
+    "total_transactions": 50200,
+    "total_errors": 2,
+    "avg_tps": 455.98802085716477,
+    "avg_latency_ms": 706.3755856092232
+  },
+  "node_results": [
+    {
+      "node_ip": "54.226.83.253",
+      "node_type": "SGX",
+      "batch_size": 500,
+      "scenario": "volatile",
+      "volatility": 0.05,
+      "transaction_count": 120000,
+      "batch_count": 240,
+      "test_duration_sec": 51.611642837524414,
+      "error_count": 0,
+      "tps": 2325.056777939911,
+      "avg_latency_ms": 1065.0218864281971,
+      "p95_latency_ms": 4230.858492851257,
+      "p99_latency_ms": 5285.3498458862305
+    },
+    {
+      "node_ip": "54.209.198.69",
+      "node_type": "SEV",
+      "batch_size": 100,
+      "scenario": "volatile",
+      "volatility": 0.05,
+      "transaction_count": 25100,
+      "batch_count": 251,
+      "test_duration_sec": 51.78415060043335,
+      "error_count": 1,
+      "tps": 484.7042909648489,
+      "avg_latency_ms": 747.377072672445,
+      "p95_latency_ms": 3179.7099113464355,
+      "p99_latency_ms": 11185.748815536499
+    },
+    {
+      "node_ip": "52.206.202.214",
+      "node_type": "SEV",
+      "batch_size": 100,
+      "scenario": "volatile",
+      "volatility": 0.05,
+      "transaction_count": 25100,
+      "batch_count": 251,
+      "test_duration_sec": 58.74481511116028,
+      "error_count": 1,
+      "tps": 427.27175074948065,
+      "avg_latency_ms": 665.3740985460015,
+      "p95_latency_ms": 4161.910057067871,
+      "p99_latency_ms": 5620.8851146698
+    },
+    {
+      "node_ip": "3.80.113.74",
+      "node_type": "SGX",
+      "batch_size": 500,
+      "scenario": "volatile",
+      "volatility": 0.05,
+      "transaction_count": 118500,
+      "batch_count": 237,
+      "test_duration_sec": 59.75303602218628,
+      "error_count": 3,
+      "tps": 1983.1628296845201,
+      "avg_latency_ms": 1411.1918477569452,
+      "p95_latency_ms": 5254.225420951843,
+      "p99_latency_ms": 19280.424118041992
+    }
+  ]
+}

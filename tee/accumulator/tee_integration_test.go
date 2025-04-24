@@ -24,19 +24,19 @@ func TestDualAccumulatorIntegration(t *testing.T) {
 		t.Fatalf("Failed to read WebAssembly binary: %v", err)
 	}
 	
-	// Create WebAssembly interface for SGX
-	sgxInterface, err := NewWasmTeeInterface("sgx-node-1", "SGX", "us-east-1", wasmBytes)
+	// Create WebAssembly interface for SGX with cross-validation enabled
+	sgxInterface, err := NewWasmTeeInterface("sgx-node-1", "SGX", "us-east-1", wasmBytes, true, false)
 	if err != nil {
 		t.Fatalf("Failed to create SGX WebAssembly interface: %v", err)
 	}
-	defer sgxInterface.Close()
+	// Close is now part of WasmTeeInterface
 	
-	// Create WebAssembly interface for SEV
-	sevInterface, err := NewWasmTeeInterface("sev-node-1", "SEV", "us-east-1", wasmBytes)
+	// Create WebAssembly interface for SEV with cross-validation enabled
+	sevInterface, err := NewWasmTeeInterface("sev-node-1", "SEV", "us-east-1", wasmBytes, true, false)
 	if err != nil {
 		t.Fatalf("Failed to create SEV WebAssembly interface: %v", err)
 	}
-	defer sevInterface.Close()
+	// Close is now part of WasmTeeInterface
 	
 	// Create TeeConnector for SGX
 	sgxConnector, err := NewTeeConnector(sgxInterface, DefaultTeeConnectorOptions())
@@ -211,17 +211,19 @@ func TestHighThroughputCrossRegional(t *testing.T) {
 	for _, region := range regions {
 		for _, teeType := range []string{"SGX", "SEV"} {
 			teeID := fmt.Sprintf("%s-%s-node", teeType, region)
-			
-			// Create interface
-			teeInterface, err := NewWasmTeeInterface(teeID, teeType, region, wasmBytes)
+
+			// Create WebAssembly interface for the TEE with cross-validation for dual-format support
+			teeInterface, err := NewWasmTeeInterface(teeID, teeType, region, wasmBytes, true, true)
 			if err != nil {
-				t.Fatalf("Failed to create %s interface for %s: %v", teeType, region, err)
+				t.Fatalf("Failed to create %s WebAssembly interface: %v", teeType, err)
 			}
-			
+			// Close is now part of WasmTeeInterface
+
 			// Create connector with optimized options
 			opts := DefaultTeeConnectorOptions()
 			opts.RegionID = region
 			opts.BatchSize = 1000 // Larger batch size for high throughput
+
 			
 			connector, err := NewTeeConnector(teeInterface, opts)
 			if err != nil {

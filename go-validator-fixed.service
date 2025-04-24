@@ -1,0 +1,16 @@
+[Unit]
+Description=Go Parameter Validator Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/usr/local/bin
+ExecStart=/usr/local/bin/parameter_validator --port=7300 --tee-type=${TEE_TYPE} --peer-endpoint=${PEER_ENDPOINT} --enable-accumulator=true --sgx-node-ip=ec2-54-225-41-220.compute-1.amazonaws.com --sev-node-ip=ec2-3-81-65-148.compute-1.amazonaws.com --batch-size=10 --batch-interval=50 --accumulator-port=7101
+Restart=always
+RestartSec=5
+Environment=TEE_TYPE=sgx
+Environment=PEER_ENDPOINT=ec2-3-81-65-148.compute-1.amazonaws.com:7300
+
+[Install]
+WantedBy=multi-user.target

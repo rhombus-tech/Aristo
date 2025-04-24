@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -291,36 +293,59 @@ func (c *Coordinator) cleanupTasks() {
 }
 // Worker Management
 func (c *Coordinator) RegisterWorker(ctx context.Context, id WorkerID, enclaveID []byte) error {
+    log.Printf("RegisterWorker: Starting registration for worker %s", id)
     c.mu.Lock()
     defer c.mu.Unlock()
 
     if _, exists := c.workers[id]; exists {
+        log.Printf("RegisterWorker: Worker %s already registered", id)
         return fmt.Errorf("worker %s already registered", id)
     }
 
-    // Create worker
+    // Create worker with properly initialized channels
     worker := &Worker{
         ID:         id,
         EnclaveID:  enclaveID,
         Status:     WorkerStatusIdle,
         LastActive: time.Now(),
         Channels:   make(map[WorkerID]*SecureChannel),
+        msgCh:      make(chan *Message, 100),  // Initialize message channel with buffer
+        doneCh:     make(chan struct{}),      // Initialize done channel
     }
 
     // Store worker state first
+    log.Printf("RegisterWorker: Saving worker %s to storage", id)
     if err := c.store.SaveWorker(ctx, worker); err != nil {
+        log.Printf("RegisterWorker: Failed to save worker %s: %v", id, err)
         return fmt.Errorf("failed to save worker: %w", err)
     }
 
-    // Start worker after successful storage
-    if err := worker.Start(); err != nil {
-        // Clean up stored state if start fails
+    // Start worker with timeout handling to prevent hanging
+    log.Printf("RegisterWorker: Starting worker %s", id)
+    startDone := make(chan error, 1)
+    go func() {
+        startDone <- worker.Start()
+    }()
+    
+    // Add timeout for worker startup
+    select {
+    case err := <-startDone:
+        if err != nil {
+            log.Printf("RegisterWorker: Failed to start worker %s: %v", id, err)
+            // Clean up stored state if start fails
+            _ = c.store.DeleteWorker(ctx, id)
+            return fmt.Errorf("failed to start worker: %w", err)
+        }
+        log.Printf("RegisterWorker: Successfully started worker %s", id)
+    case <-time.After(2 * time.Second):
+        log.Printf("RegisterWorker: Timed out starting worker %s", id)
         _ = c.store.DeleteWorker(ctx, id)
-        return fmt.Errorf("failed to start worker: %w", err)
+        return fmt.Errorf("timed out starting worker")
     }
 
     // Add to in-memory map only after successful storage and start
     c.workers[id] = worker
+    log.Printf("RegisterWorker: Successfully registered worker %s", id)
     return nil
 }
 
@@ -351,35 +376,28 @@ func (c *Coordinator) UnregisterWorker(ctx context.Context, id WorkerID) error {
 
 // TEE Pair Management
 func (c *Coordinator) RegisterTEEPair(ctx context.Context, regionID string, pair *TEEPair) error {
+    log.Printf("Starting TEE pair registration for region %s", regionID)
     c.mu.Lock()
     defer c.mu.Unlock()
+    log.Printf("Acquired coordinator lock for TEE pair registration")
 
-    // Register SGX worker
-    sgxWorker := &Worker{
-        ID:        WorkerID(pair.SGXID),
-        EnclaveID: pair.SGXID,
-        Status:    WorkerStatusIdle,
-        Channels:  make(map[WorkerID]*SecureChannel),
+    // Get existing SGX worker
+    sgxWorkerID := WorkerID(pair.SGXID)
+    log.Printf("Looking for existing SGX worker with ID: %s", sgxWorkerID)
+    sgxWorker, sgxExists := c.workers[sgxWorkerID]
+    if !sgxExists {
+        return fmt.Errorf("SGX worker %s not found", sgxWorkerID)
     }
-    
-    // Register SEV worker
-    sevWorker := &Worker{
-        ID:        WorkerID(pair.SEVID),
-        EnclaveID: pair.SEVID,
-        Status:    WorkerStatusIdle,
-        Channels:  make(map[WorkerID]*SecureChannel),
-    }
+    log.Printf("Using existing SGX worker: %s", sgxWorkerID)
 
-    // Register workers
-    if err := c.RegisterWorker(ctx, sgxWorker.ID, sgxWorker.EnclaveID); err != nil {
-        return fmt.Errorf("failed to register SGX worker: %w", err)
+    // Get existing SEV worker
+    sevWorkerID := WorkerID(pair.SEVID)
+    log.Printf("Looking for existing SEV worker with ID: %s", sevWorkerID)
+    sevWorker, sevExists := c.workers[sevWorkerID]
+    if !sevExists {
+        return fmt.Errorf("SEV worker %s not found", sevWorkerID)
     }
-    
-    if err := c.RegisterWorker(ctx, sevWorker.ID, sevWorker.EnclaveID); err != nil {
-        // Cleanup SGX worker if SEV fails
-        c.UnregisterWorker(ctx, sgxWorker.ID)
-        return fmt.Errorf("failed to register SEV worker: %w", err)
-    }
+    log.Printf("Using existing SEV worker: %s", sevWorkerID)
 
     // Create and store TEE pair info
     pairInfo := TEEPairInfo{
@@ -389,14 +407,51 @@ func (c *Coordinator) RegisterTEEPair(ctx context.Context, regionID string, pair
         LastUsed:  time.Now(),
     }
 
-    // Establish secure channel
-    channel, err := c.GetSecureChannel(ctx, sgxWorker.ID, sevWorker.ID)
+    // Establish secure channel with more detailed logging
+    log.Printf("Attempting to establish secure channel between workers %s and %s...", sgxWorker.ID, sevWorker.ID)
+    startTime := time.Now()
+    
+    // Use a channel with timeout to handle potential hang in secure channel establishment
+    channelDone := make(chan struct {
+        channel *SecureChannel
+        err     error
+    }, 1)
+    
+    go func() {
+        channel, err := c.GetSecureChannel(ctx, sgxWorker.ID, sevWorker.ID)
+        channelDone <- struct {
+            channel *SecureChannel
+            err     error
+        }{channel, err}
+    }()
+    
+    var channel *SecureChannel
+    var err error
+    
+    // Wait for channel establishment with timeout
+    select {
+    case result := <-channelDone:
+        channel = result.channel
+        err = result.err
+    case <-time.After(3 * time.Second):
+        err = fmt.Errorf("timeout establishing secure channel")
+    }
+    
+    elapsed := time.Since(startTime)
+    
     if err != nil {
-        // Cleanup workers if channel establishment fails
-        c.UnregisterWorker(ctx, sgxWorker.ID)
-        c.UnregisterWorker(ctx, sevWorker.ID)
+        // Only unregister workers that were created in this function
+        log.Printf("Failed to establish secure channel after %v: %v", elapsed, err)
+        if !sgxExists {
+            c.UnregisterWorker(ctx, sgxWorker.ID)
+        }
+        if !sevExists {
+            c.UnregisterWorker(ctx, sevWorker.ID)
+        }
         return fmt.Errorf("failed to establish secure channel: %w", err)
     }
+    
+    log.Printf("Successfully established secure channel in %v", elapsed)
     pairInfo.Channel = channel
 
     // Add to region pairs
@@ -552,26 +607,57 @@ func (c *Coordinator) ValidateRegionalOperation(ctx context.Context, regionID st
 
 // Channel Management
 func (c *Coordinator) GetSecureChannel(ctx context.Context, worker1, worker2 WorkerID) (*SecureChannel, error) {
+    log.Printf("GetSecureChannel: Attempting to get secure channel between workers %s and %s", worker1, worker2)
+    
     // First try to load existing channel
+    log.Printf("GetSecureChannel: Trying to load existing channel from store")
     channel, err := c.store.LoadChannel(ctx, worker1, worker2)
+    
+    // Handle channel not found or other errors
     if err != nil {
-        // Only create new channel if one doesn't exist
-        if !errors.Is(err, storage.ErrNotFound) {
+        log.Printf("GetSecureChannel: Load channel result: %v", err)
+        
+        // Check for various forms of "not found" errors to make the code more robust
+        errString := err.Error()
+        if errors.Is(err, storage.ErrNotFound) || 
+           strings.Contains(errString, "not found") || 
+           strings.Contains(errString, "key not found") {
+            // This is normal for a new channel, just log and continue
+            log.Printf("GetSecureChannel: No existing channel found, creating new one")
+        } else {
+            // This is a genuine error accessing storage
+            log.Printf("GetSecureChannel: Error loading channel: %v", err)
             return nil, fmt.Errorf("failed to load channel: %w", err)
         }
 
         // Create new channel
+        log.Printf("GetSecureChannel: Creating new secure channel")
         channel = NewSecureChannel(worker1, worker2)
-        if err := channel.EstablishSecure(); err != nil {
+        
+        // Use timeout-based secure channel establishment to prevent hanging
+        log.Printf("GetSecureChannel: Attempting to establish secure channel with timeout (3s)")
+        startTime := time.Now()
+        err := channel.EstablishSecureWithTimeout(3 * time.Second)
+        elapsed := time.Since(startTime)
+        
+        if err != nil {
+            log.Printf("GetSecureChannel: Failed to establish secure channel after %v: %v", elapsed, err)
             return nil, fmt.Errorf("failed to establish secure channel: %w", err)
         }
+        log.Printf("GetSecureChannel: Successfully established secure channel in %v", elapsed)
 
         // Save new channel
+        log.Printf("GetSecureChannel: Saving channel to store")
         if err := c.store.SaveChannel(ctx, channel); err != nil {
+            log.Printf("GetSecureChannel: Error saving channel: %v", err)
             return nil, fmt.Errorf("failed to save channel: %w", err)
         }
+        log.Printf("GetSecureChannel: Channel saved successfully")
+    } else {
+        log.Printf("GetSecureChannel: Successfully loaded existing channel")
     }
 
+    log.Printf("GetSecureChannel: Returning channel successfully")
     return channel, nil
 }
 

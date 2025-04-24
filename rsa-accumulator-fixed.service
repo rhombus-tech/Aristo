@@ -1,0 +1,19 @@
+[Unit]
+Description=RSA Accumulator Simulation
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nasdaq-tee/rsa-accumulator
+ExecStart=/bin/bash /home/ubuntu/nasdaq-tee/rsa-accumulator/rsa_accumulator.wasm
+Restart=always
+RestartSec=5
+Environment=PORT=7101
+Environment=SUPPORT_LENGTH_PREFIX=true
+Environment=SUPPORT_DIRECT_FORMAT=true
+Environment=BATCH_SIZE=1000
+Environment=PARALLELISM=8
+
+[Install]
+WantedBy=multi-user.target

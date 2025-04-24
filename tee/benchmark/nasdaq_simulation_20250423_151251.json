@@ -1,0 +1,78 @@
+{
+  "timestamp": "2025-04-23T15:17:19.493865",
+  "configuration": {
+    "batch_size": 500,
+    "iterations": 1000,
+    "concurrent_clients": 8,
+    "mode": "both",
+    "total_duration_sec": 262.6050307750702
+  },
+  "sgx_aggregate": {
+    "node_count": 2,
+    "total_transactions": 975000,
+    "total_errors": 66,
+    "avg_tps": 4070.3515573529876,
+    "avg_latency_ms": 782.9234013180557
+  },
+  "sev_aggregate": {
+    "node_count": 2,
+    "total_transactions": 193000,
+    "total_errors": 110,
+    "avg_tps": 430.4633351876804,
+    "avg_latency_ms": 368.85881998679827
+  },
+  "node_results": [
+    {
+      "node_ip": "54.226.83.253",
+      "node_type": "SGX",
+      "batch_size": 500,
+      "transaction_count": 502000,
+      "batch_count": 1004,
+      "test_duration_sec": 106.2629828453064,
+      "error_count": 4,
+      "tps": 4724.128634058697,
+      "avg_latency_ms": 730.6662211380157,
+      "p95_latency_ms": 4134.287118911743,
+      "p99_latency_ms": 7130.867958068848
+    },
+    {
+      "node_ip": "3.80.113.74",
+      "node_type": "SGX",
+      "batch_size": 500,
+      "transaction_count": 473000,
+      "batch_count": 946,
+      "test_duration_sec": 138.44275975227356,
+      "error_count": 62,
+      "tps": 3416.5744806472785,
+      "avg_latency_ms": 835.1805814980956,
+      "p95_latency_ms": 4198.54211807251,
+      "p99_latency_ms": 7203.789234161377
+    },
+    {
+      "node_ip": "54.209.198.69",
+      "node_type": "SEV",
+      "batch_size": 100,
+      "transaction_count": 96600,
+      "batch_count": 966,
+      "test_duration_sec": 195.61832904815674,
+      "error_count": 54,
+      "tps": 493.8187565042502,
+      "avg_latency_ms": 412.42414996737523,
+      "p95_latency_ms": 1115.3271198272705,
+      "p99_latency_ms": 6016.5760707855225
+    },
+    {
+      "node_ip": "52.206.202.214",
+      "node_type": "SEV",
+      "batch_size": 100,
+      "transaction_count": 96400,
+      "batch_count": 964,
+      "test_duration_sec": 262.5930860042572,
+      "error_count": 56,
+      "tps": 367.1079138711106,
+      "avg_latency_ms": 325.2934900062213,
+      "p95_latency_ms": 1845.0350761413574,
+      "p99_latency_ms": 5108.106851577759
+    }
+  ]
+}

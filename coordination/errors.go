@@ -14,4 +14,5 @@ var (
     ErrRegionNotFound = errors.New("region not found")
     ErrInvalidRegionID = errors.New("invalid region ID")
     ErrRegionExists    = errors.New("region already exists")
+    ErrNotFound        = errors.New("resource not found")
 )

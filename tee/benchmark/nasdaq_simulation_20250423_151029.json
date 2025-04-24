@@ -1,0 +1,74 @@
+{
+  "timestamp": "2025-04-23T15:10:41.774959",
+  "configuration": {
+    "batch_size": 500,
+    "iterations": 50,
+    "concurrent_clients": 4,
+    "mode": "both",
+    "total_duration_sec": 12.266310930252075
+  },
+  "sgx_aggregate": {
+    "node_count": 2,
+    "total_transactions": 100,
+    "total_errors": 0,
+    "avg_tps": 4.098652352788716,
+    "avg_latency_ms": 243.98263692855835
+  },
+  "sev_aggregate": {
+    "node_count": 2,
+    "total_transactions": 100,
+    "total_errors": 0,
+    "avg_tps": 4.491368185215491,
+    "avg_latency_ms": 224.4119381904602
+  },
+  "node_results": [
+    {
+      "node_ip": "52.206.202.214",
+      "node_type": "SEV",
+      "batch_size": 500,
+      "transaction_count": 50,
+      "batch_count": 50,
+      "error_count": 0,
+      "tps": 4.8894174143995475,
+      "avg_latency_ms": 204.523344039917,
+      "p95_latency_ms": 1061.3687872886658,
+      "p99_latency_ms": 0
+    },
+    {
+      "node_ip": "54.226.83.253",
+      "node_type": "SGX",
+      "batch_size": 500,
+      "transaction_count": 50,
+      "batch_count": 50,
+      "error_count": 0,
+      "tps": 4.098265972879418,
+      "avg_latency_ms": 244.00563716888428,
+      "p95_latency_ms": 1068.299686908722,
+      "p99_latency_ms": 0
+    },
+    {
+      "node_ip": "3.80.113.74",
+      "node_type": "SGX",
+      "batch_size": 500,
+      "transaction_count": 50,
+      "batch_count": 50,
+      "error_count": 0,
+      "tps": 4.0990387326980136,
+      "avg_latency_ms": 243.95963668823242,
+      "p95_latency_ms": 1067.6332116127014,
+      "p99_latency_ms": 0
+    },
+    {
+      "node_ip": "54.209.198.69",
+      "node_type": "SEV",
+      "batch_size": 500,
+      "transaction_count": 50,
+      "batch_count": 50,
+      "error_count": 0,
+      "tps": 4.093318956031435,
+      "avg_latency_ms": 244.30053234100342,
+      "p95_latency_ms": 1071.1901783943176,
+      "p99_latency_ms": 0
+    }
+  ]
+}

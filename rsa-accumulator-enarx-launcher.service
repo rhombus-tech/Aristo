@@ -1,0 +1,16 @@
+[Unit]
+Description=RSA Accumulator with Enarx TEE Integration
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nasdaq-tee/rsa-accumulator
+ExecStart=/home/ubuntu/nasdaq-tee/rsa-accumulator/run_accumulator.sh
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+[Install]
+WantedBy=multi-user.target

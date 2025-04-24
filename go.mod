@@ -159,3 +159,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
+
+replace github.com/bytecodealliance/wasmtime-go => github.com/bytecodealliance/wasmtime-go v1.0.0

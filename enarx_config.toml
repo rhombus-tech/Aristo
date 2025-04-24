@@ -1,0 +1,36 @@
+# Enarx WebAssembly Module Configuration
+# This configures the RSA accumulator module for TEE execution
+
+# WASI configuration
+[wasi]
+# Map the Unix domain socket to enable IPC
+# The socket file is passed through to the WebAssembly module
+map_dirs = { "/tmp" = "/tmp" }
+
+# Environment variables
+env = [
+  "TEE_TYPE=sgx",
+  "MAX_PARAMETER_SIZE=1024",
+  "ENABLE_LENGTH_PREFIX_FORMAT=true",
+  "ENABLE_DIRECT_FORMAT=true",
+  "LOG_LEVEL=info"
+]
+
+# Allowed host calls
+# Enable what's needed for dual-format parameter validation
+[tcb]
+# Allow randomness for cryptographic operations
+allow_random = true
+# Enable sockets for IPC communication
+allow_host_net = true
+# Access to time for timestamps
+allow_host_time = true
+# Allow output for logging
+allow_host_std = true
+
+# Limits for security
+[limits]
+# Memory limits 
+max_memory = "128MB"
+# Thread limits
+max_threads = 4

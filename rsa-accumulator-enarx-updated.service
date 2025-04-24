@@ -1,0 +1,14 @@
+[Unit]
+Description=RSA Accumulator with Enarx TEE Integration
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nasdaq-tee/rsa-accumulator
+ExecStart=/home/ubuntu/.enarx/bin/enarx run --backend nil --wasmcfgfile enarx_config.toml rsa_accumulator.wasm
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
