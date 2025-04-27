@@ -21,7 +21,19 @@ Our architecture leverages both Intel SGX and AMD SEV trusted execution environm
   - RSA accumulator for cryptographic verification
   - Memory-safe execution within TEE boundaries
 
-## Deployment Steps
+## Deployment Flow Overview
+
+The complete deployment includes these key steps:
+
+1. **Prerequisites**: Install necessary tools and dependencies
+2. **WebAssembly RSA Accumulator**: Build and deploy the dual-format parameter validator 
+3. **AWS TEE Infrastructure**: Deploy SGX and SEV nodes with CloudFormation
+4. **Cross-Attestation Setup**: Configure the cross-attestation between TEE types
+5. **Market Data Simulator**: Deploy the enhanced NASDAQ simulator
+6. **Benchmark Testing**: Measure performance across the TEE mesh
+7. **Multi-Region Setup**: Deploy to multiple geographic regions (production)
+
+## Detailed Deployment Steps
 
 ### 1. Prerequisites
 
@@ -32,9 +44,44 @@ cd aristo
 
 # Install required dependencies
 pip install -r requirements.txt
+
+# Install TinyGo for WebAssembly compilation
+brew install tinygo
+
+# Install Enarx for WebAssembly trusted execution
+curl -sSf https://download.enarx.dev/enarx-installer | sh
 ```
 
-### 2. AWS Deployment of TEE Mesh
+### 2. WebAssembly RSA Accumulator Deployment
+
+The WebAssembly RSA accumulator with dual-format parameter validation must be built and deployed first:
+
+```bash
+cd tee/deployment/aws
+
+# Build the WebAssembly module with dual-format parameter validation support
+./build_accumulator_wasm.sh
+
+# Deploy to SGX and SEV nodes
+./deploy_rsa_accumulator_service.sh
+```
+
+Key configuration parameters in the WebAssembly accumulator:
+
+- `supportLengthPrefix`: Set to `true` to enable length-prefixed format validation (4-byte prefix)
+- `supportDirectFormat`: Set to `true` to enable direct format validation (no length prefix)
+- `batchSize`: Set to `1000` for optimal performance
+- `parallelism`: Set to `8` for multi-threaded execution
+
+The deployment process:
+
+1. Builds the WebAssembly module using TinyGo
+2. Creates Enarx configuration for SGX and SEV
+3. Deploys to both node types with appropriate runtime settings
+4. Verifies the services are running and accepting connections
+5. Creates RSA accumulator instances for cryptographic verification
+
+### 3. AWS Deployment of TEE Mesh
 
 The TEE mesh can be deployed using our CloudFormation templates:
 
