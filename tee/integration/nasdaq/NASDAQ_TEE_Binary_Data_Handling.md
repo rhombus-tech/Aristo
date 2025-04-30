@@ -20,8 +20,10 @@ Our solution implements a robust binary data handling approach that aligns with 
            break
    ```
 
-2. **Dual Format Support**
-   - **Length-Prefixed Format**: Used for SGX TEE (primary default)
+2. **Dual Format Support (Both SGX and SEV TEEs)**
+   Both TEE types execute the same data with support for both formats:
+   
+   - **Length-Prefixed Format** (Common WebAssembly Convention)
    ```json
    {
      "binary": true,
@@ -31,12 +33,14 @@ Our solution implements a robust binary data handling approach that aligns with 
    }
    ```
    
-   - **Direct Format**: Used for SEV TEE (fallback)
+   - **Direct Format** (Used in Go tests and fixed-size data)
    ```
    Raw binary data with appropriate headers:
    X-TEE-Format: direct
    Content-Type: application/octet-stream
    ```
+   
+   Both formats are sent to both TEE types for cross-validation and verification.
 
 3. **Encoding Strategy**
    - Base64 encoding for JSON-compatible transport
