@@ -19,3 +19,7 @@ Cargo.lock
 *.wasm
 # Add this to .gitignore to protect credentials
 tee/integration/nasdaq/nasdaq_credentials.env
+
+# Log files
+*.log
+tee/integration/nasdaq/*.log

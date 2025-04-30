@@ -8,6 +8,7 @@ import json
 import logging
 import threading
 import time
+import argparse
 from datetime import datetime
 
 # Configure logging
@@ -135,8 +136,13 @@ def print_stats():
         time.sleep(10)
 
 if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Mock TEE Endpoint Server')
+    parser.add_argument('--port', type=int, default=8081, help='Port to run the server on (default: 8081)')
+    args = parser.parse_args()
+    
     # Start the mock TEE endpoint
-    server = MockTEEServer(port=8081)
+    server = MockTEEServer(port=args.port)
     server.start()
     
     # Start the stats thread

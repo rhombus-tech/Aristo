@@ -66,8 +66,18 @@ class NasdaqKafkaIntegration:
         self.running = False
         
         # Define the topics we're entitled to
-        self.nasdaq_basic_topics = ["QBBO-A-CORE", "QBBO-B-CORE", "QBBO-C-CORE"]
-        self.nls_plus_topics = ["NLSCTA", "NLSUTP"]
+        # When not using NASDAQ SDK, we need to append .stream to topic names
+        self.nasdaq_basic_topics = ["QBBO-A-CORE.stream", "QBBO-B-CORE.stream", "QBBO-C-CORE.stream"]
+        self.nls_plus_topics = ["NLSCTA.stream", "NLSUTP.stream"]
+        
+        # Map stream topic names to their original names for internal reference
+        self._topic_name_mapping = {
+            "QBBO-A-CORE.stream": "QBBO-A-CORE",
+            "QBBO-B-CORE.stream": "QBBO-B-CORE",
+            "QBBO-C-CORE.stream": "QBBO-C-CORE",
+            "NLSCTA.stream": "NLSCTA",
+            "NLSUTP.stream": "NLSUTP"
+        }
         
         logger.info(f"NASDAQ-TEE Kafka Integration initialized for region {region_id}")
     
@@ -128,14 +138,15 @@ class NasdaqKafkaIntegration:
             # Get fresh token
             token = self._get_oauth_token()
             
-            # Create unique consumer group ID for this region
-            group_id = f"tee-{self.region_id}-{group_id_suffix}"
+            # Use the NASDAQ-provided group ID as requested by NASDAQ (Apr 2025)
+            group_id = "rhombustechnologies-tal-zisckindt"
             
             # Configure Kafka consumer
             # Create OAuth callback that returns the required tuple format
             def oauth_callback(config):
                 # The callback must return (token_str, expiry_time[, principal, extensions])
-                return (token, int(self.token_expiry), self.client_id, None)
+                # NOTE: Exact format is critical, just like in WebAssembly parameter validation
+                return (token, int(self.token_expiry))
                 
             config = {
                 'bootstrap.servers': self.bootstrap_server,
@@ -282,11 +293,13 @@ class NasdaqKafkaIntegration:
         
         Args:
             message_value (bytes): Raw message value
-            topic (str): Kafka topic of the message
+            topic (str): Kafka topic of the message (with .stream suffix when not using SDK)
             
         Returns:
             dict: Structured data for TEE processing
         """
+        # Get original topic name without .stream suffix for internal use
+        original_topic = self._topic_name_mapping.get(topic, topic)
         try:
             # Attempt to parse as JSON first
             try:
@@ -322,8 +335,13 @@ class NasdaqKafkaIntegration:
                     "timestamp": fields[5] if len(fields) > 5 else "",
                 }
                 
-                tape = topic.split('-')[1]  # A, B, or C
-                
+                # Get the tape from the original topic name (A, B, or C)
+                # Handle both formats: with or without .stream suffix
+                if original_topic != topic:  # We have a mapping
+                    tape = original_topic.split('-')[1] if '-' in original_topic else ''
+                else:  # No mapping found, use the topic as is
+                    tape = topic.split('-')[1] if '-' in topic else ''
+                    
                 # Add metadata for TEE processing
                 tee_data = {
                     "nasdaq_basic": parsed_data,
@@ -347,13 +365,15 @@ class NasdaqKafkaIntegration:
         
         Args:
             message_value (bytes): Raw message value
-            topic (str): Kafka topic of the message
+            topic (str): Kafka topic of the message (with .stream suffix when not using SDK)
             
         Returns:
             dict: Structured data for TEE processing
         """
+        # Get original topic name without .stream suffix for internal use
+        original_topic = self._topic_name_mapping.get(topic, topic)
         try:
-            # Attempt to parse as JSON first
+            # First try to parse as JSON (if it's in JSON format)
             try:
                 data = json.loads(message_value)
                 
@@ -364,39 +384,59 @@ class NasdaqKafkaIntegration:
                         "source_region": self.region_id,
                         "timestamp": datetime.now().isoformat(),
                         "data_type": "nls_plus",
-                        "topic": topic,  # NLSCTA or NLSUTP
+                        "topic": original_topic,  # Use original topic name without .stream  # NLSCTA or NLSUTP
                         "security_level": "market_data"
                     }
                 }
                 return tee_data
                 
             except json.JSONDecodeError:
-                # Try parsing as delimited format
-                # Format depends on the specific NLS Plus format (refer to documentation)
-                data_str = message_value.decode('utf-8')
-                fields = data_str.split('|')
+                # Handle binary format - NLS Plus messages are typically binary data
+                # Create a binary representation with fields based on NASDAQ spec
+                # Instead of trying to decode as text, we'll process as binary
                 
-                # Parse based on NLS Plus format - adjust field indices based on documentation
-                parsed_data = {
-                    "symbol": fields[0] if len(fields) > 0 else "",
-                    "price": float(fields[1]) if len(fields) > 1 else 0,
-                    "size": int(fields[2]) if len(fields) > 2 else 0,
-                    "trade_id": fields[3] if len(fields) > 3 else "",
-                    "timestamp": fields[4] if len(fields) > 4 else "",
-                }
+                # Create a hexdump for debugging
+                hex_repr = message_value.hex()
+                logger.debug(f"NLS Plus binary message: {hex_repr[:50]}... ({len(message_value)} bytes)")
                 
-                # Add metadata for TEE processing
-                tee_data = {
-                    "nls_plus": parsed_data,
-                    "tee_metadata": {
-                        "source_region": self.region_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "data_type": "nls_plus",
-                        "topic": topic,  # NLSCTA or NLSUTP
-                        "security_level": "market_data"
+                # Extract binary fields according to NASDAQ NLS Plus format
+                # This is a simplified example - adjust according to actual NASDAQ specs
+                if len(message_value) >= 8:  # Ensure we have enough data for basic header
+                    # Parse basic binary structure
+                    # The actual parsing logic depends on the specific NLS Plus binary format
+                    # This is just a placeholder - replace with actual format parsing
+                    
+                    # Example: First 2 bytes might be message type
+                    msg_type = int.from_bytes(message_value[0:2], byteorder='big')
+                    
+                    # Create parsed representation
+                    parsed_data = {
+                        "msg_type": msg_type,
+                        "binary_size": len(message_value),
+                        "binary_prefix": hex_repr[:20],  # First 10 bytes in hex for reference
+                        "topic": original_topic
                     }
-                }
-                return tee_data
+                    
+                    # Add timestamp from system time since we can't parse it from binary yet
+                    parsed_data["timestamp"] = datetime.now().isoformat()
+                    
+                    # Add metadata for TEE processing
+                    tee_data = {
+                        "nls_plus": parsed_data,
+                        "tee_metadata": {
+                            "source_region": self.region_id,
+                            "timestamp": datetime.now().isoformat(),
+                            "data_type": "nls_plus",
+                            "topic": original_topic,
+                            "format": "binary",
+                            "security_level": "market_data"
+                        }
+                    }
+                    return tee_data
+                else:
+                    # Message too small to contain valid data
+                    logger.warning(f"NLS Plus message too small: {len(message_value)} bytes")
+                    raise ValueError(f"Message too small: {len(message_value)} bytes")
                 
         except Exception as e:
             logger.error(f"Error parsing NLS Plus message: {str(e)}")
