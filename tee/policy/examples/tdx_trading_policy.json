@@ -1,0 +1,35 @@
+{
+  "id": "tdx-ai-trading-policy",
+  "name": "AI Trading TDX Policy",
+  "version": "1.0.0",
+  "description": "Verification policy for AI trading models running in TDX",
+  "created_at": "2025-05-02T10:00:00Z",
+  "updated_at": "2025-05-02T10:00:00Z",
+  "target_tees": ["TDX"],
+  "constraints": [
+    {
+      "id": "tdx-measurement-whitelist",
+      "type": "measurement",
+      "operator": "equals",
+      "expected_value": "a1b2c3d4e5f6...",
+      "error_message": "TDX measurement not in whitelist for AI trading",
+      "severity": "fatal"
+    },
+    {
+      "id": "tdx-pcs-cert-valid",
+      "type": "wasm",
+      "function_name": "verify_pcs_certificate",
+      "arguments": ["attestation", "current_time"],
+      "error_message": "TDX PCS certificate validation failed",
+      "severity": "fatal"
+    },
+    {
+      "id": "tdx-max-trading-capacity",
+      "type": "wasm",
+      "function_name": "verify_trading_capacity",
+      "arguments": ["measurement", "max_trades_per_minute=40000"],
+      "error_message": "Trading capacity exceeds allowed maximum",
+      "severity": "error"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "wasm-policy-engine",
+  "version": "1.0.0",
+  "description": "WebAssembly policy engine for TDX attestation",
+  "scripts": {
+    "asbuild": "asc"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.27.36"
+  }
+}

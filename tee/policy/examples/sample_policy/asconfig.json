@@ -1,0 +1,25 @@
+{
+  "targets": {
+    "measurement_validator": {
+      "outFile": "build/measurement_validator.wasm",
+      "textFile": "build/measurement_validator.wat",
+      "sourceMap": true,
+      "optimizeLevel": 3,
+      "shrinkLevel": 1,
+      "converge": false,
+      "noAssert": false
+    },
+    "trading_limits": {
+      "outFile": "build/trading_limits.wasm",
+      "textFile": "build/trading_limits.wat",
+      "sourceMap": true,
+      "optimizeLevel": 3,
+      "shrinkLevel": 1,
+      "converge": false,
+      "noAssert": false
+    }
+  },
+  "options": {
+    "bindings": "raw"
+  }
+}

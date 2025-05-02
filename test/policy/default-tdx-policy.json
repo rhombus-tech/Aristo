@@ -1,0 +1,19 @@
+{
+  "id": "default-tdx-policy",
+  "name": "Default TDX Policy",
+  "version": "1.0.0",
+  "description": "Default policy for TDX attestation",
+  "created_at": "2023-09-01T00:00:00Z",
+  "updated_at": "2023-09-01T00:00:00Z",
+  "target_tees": ["TDX"],
+  "constraints": [
+    {
+      "id": "tdx-pcr-check",
+      "type": "measurement",
+      "operator": "equals",
+      "expected_value": "ALLOWALL",
+      "error_message": "TDX measurement mismatch",
+      "severity": "fatal"
+    }
+  ]
+}

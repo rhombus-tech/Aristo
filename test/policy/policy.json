@@ -1,0 +1,27 @@
+{
+  "id": "tdx-baseline-policy",
+  "name": "TDX Baseline Attestation Policy",
+  "version": "1.0.0",
+  "description": "Basic attestation policy for TDX with measurement and certificate validation",
+  "created_at": "2025-05-02T06:26:19-04:00",
+  "updated_at": "2025-05-02T06:26:19-04:00",
+  "target_tees": ["TDX"],
+  "constraints": [
+    {
+      "id": "tdx-measurement-validator",
+      "type": "measurement_validator",
+      "function_name": "validate_measurement",
+      "error_message": "TDX measurement validation failed",
+      "severity": "error",
+      "arguments": []
+    },
+    {
+      "id": "max-trading-limit",
+      "type": "trading_limits",
+      "function_name": "check_trading_limits",
+      "error_message": "Trading limit exceeded for this attestation",
+      "severity": "error",
+      "arguments": ["5000", "10"]
+    }
+  ]
+}
