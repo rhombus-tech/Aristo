@@ -10,18 +10,15 @@ Intel Trust Domain Extensions (TDX) has been integrated into our dual-TEE archit
 
 Our security architecture now supports three TEE technologies, all actively used in production:
 
-1. **Intel SGX**: Primary TEE for sensitive operations requiring strong security guarantees
-   - Used for financial transactions, key management, and sensitive data processing
-   - Provides memory encryption and integrity protection 
-   - Offers hardware-level isolation for critical operations
-
-2. **AMD SEV**: Concurrent TEE running alongside SGX
-   - Provides VM-level memory encryption
-   - Has memory constraints requiring sampling techniques
-   - Maintains parallel execution paths for cross-platform compatibility
+1. **Intel SGX and AMD SEV**: Core TEEs executed in parallel for every operation
+   - Both environments process the same workloads simultaneously
+   - Results are cross-validated for enhanced security
+   - SGX provides strong memory encryption and isolation
+   - SEV offers VM-level protection on AMD hardware
+   - Sampling techniques handle SEV memory constraints
 
 3. **Intel TDX**: Extension for high-throughput AI/ML workloads
-   - Optimized for batch processing operations (up to 44k+ TPS)
+   - Optimized for batch processing operations
    - Larger memory footprint accommodates complex AI models
    - Integrated with paired execution model for security-performance balance
 
