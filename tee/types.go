@@ -12,6 +12,7 @@ import (
 const (
     TEETypeSGX = "SGX"
     TEETypeSEV = "SEV"
+    TEETypeTDX = "TDX"
 )
 
 // TEEPairInfo represents metadata about a TEE pair
@@ -19,8 +20,9 @@ type TEEPairInfo struct {
     ID          string `json:"id"`
     SGXEndpoint string `json:"sgx_endpoint"`
     SEVEndpoint string `json:"sev_endpoint"`
+    TDXEndpoint string `json:"tdx_endpoint"`
     Status      string `json:"status"`
-    Attestations [2]core.TEEAttestation `json:"attestations,omitempty"`
+    Attestations [3]core.TEEAttestation `json:"attestations,omitempty"`
 }
 
 // TEEPairConfig defines configuration for a TEE pair
@@ -28,6 +30,7 @@ type TEEPairConfig struct {
     ID          string        `json:"id"`
     SGXEndpoint string        `json:"sgx_endpoint"`
     SEVEndpoint string        `json:"sev_endpoint"`
+    TDXEndpoint string        `json:"tdx_endpoint"`
     Thresholds  Thresholds    `json:"thresholds"`
 }
 
@@ -44,6 +47,7 @@ type TEEPairMetrics struct {
     PairID          string        `json:"pair_id"`
     SGXEndpoint     string        `json:"sgx_endpoint"`
     SEVEndpoint     string        `json:"sev_endpoint"`
+    TDXEndpoint     string        `json:"tdx_endpoint"`
     LastHealthCheck time.Time     `json:"last_health_check"`
     LastHealthy     time.Time     `json:"last_healthy"`
     SuccessRate     float64       `json:"success_rate"`
