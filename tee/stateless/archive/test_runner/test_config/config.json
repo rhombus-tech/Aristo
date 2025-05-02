@@ -1,0 +1,19 @@
+{
+  "tee_endpoint": "http://localhost:8080/execute",
+  "zk_archive_config": {
+    "batchSize": 10,
+    "archivalPeriod": 2000000000,
+    "referencePoints": 5,
+    "recursiveProofLevels": 2,
+    "parallelism": 2,
+    "teeVerifiedOnly": true
+  },
+  "batch_size": 5,
+  "use_acceleration": false,
+  "max_proof_size": 65536,
+  "field_element_size": 32,
+  "enable_metrics": true,
+  "metrics_endpoint": "",
+  "log_level": "debug",
+  "performance_log_freq": 1
+}

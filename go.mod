@@ -5,8 +5,10 @@ go 1.22.5
 require (
 	github.com/ava-labs/avalanchego v1.11.12-rc.2.0.20241001202925-f03745d187d0
 	github.com/ava-labs/hypersdk v0.0.18-0.20241011004749-6f15b2f26e77
+	github.com/bytecodealliance/wasmtime-go v1.0.0
 	github.com/ethereum/go-ethereum v1.13.14
 	github.com/fatih/color v1.13.0
+	github.com/gabstv/go-bsdiff v1.0.5
 	github.com/gorilla/mux v1.8.0
 	github.com/onsi/ginkgo/v2 v2.13.1
 	github.com/rs/cors v1.7.0
@@ -19,9 +21,7 @@ require (
 )
 
 require (
-	github.com/bytecodealliance/wasmtime-go v1.0.0 // indirect
 	github.com/dsnet/compress v0.0.0-20171208185109-cc9eb1d7ad76 // indirect
-	github.com/gabstv/go-bsdiff v1.0.5 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 )
 
@@ -107,7 +107,7 @@ require (
 	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_golang v1.16.0 // indirect
+	github.com/prometheus/client_golang v1.16.0
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect

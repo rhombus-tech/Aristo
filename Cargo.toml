@@ -19,6 +19,7 @@ members = [
     "hyper/x/contracts/test/contracts/state_access",
     "hyper/x/contracts/test/contracts/state_test",
     "hyper/x/contracts/sdk-macros", "tee_build/rsa_accumulator_wasi",
+    "execution/polynomial_commitments",
 ]
 
 [workspace.dependencies]
