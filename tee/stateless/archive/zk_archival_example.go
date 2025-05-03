@@ -531,3 +531,20 @@ func (v *mockStatelessVerifier) VerifyProofBatch(ctx context.Context, proofs []c
 	// Return the verification results for each proof
 	return results, nil
 }
+
+// GetMetrics returns verifier metrics for monitoring and tracking
+// This implements the core.StatelessVerifier interface requirement
+func (m *mockStatelessVerifier) GetMetrics() interface{} {
+	// For the mock implementation, return basic metrics structure
+	return struct {
+		ProofsVerified         int
+		VerificationSuccessful int
+		VerificationFailed     int
+		AverageLatencyMs       float64
+	}{
+		ProofsVerified:         100, // Mock values for the example
+		VerificationSuccessful: 95,
+		VerificationFailed:     5,
+		AverageLatencyMs:       2.5,
+	}
+}

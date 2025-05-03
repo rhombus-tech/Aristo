@@ -105,7 +105,8 @@ func NewZKArchiver(
 		return nil, fmt.Errorf("batch size must be greater than 0")
 	}
 	
-	archiver := &ZKArchiver{
+	// Initialize archiver state
+	a := &ZKArchiver{
 		config:          config,
 		statelessChain:  statelessChain,
 		circuit:         circuit,
@@ -114,14 +115,16 @@ func NewZKArchiver(
 		recursiveProofs: make(map[uint64]map[uint64][]byte),
 		metrics:         &ZKArchiverMetrics{},
 		shutdown:        make(chan struct{}),
+		// Start with lastArchivedHeight at -1 to force inclusion of genesis block
+		lastArchivedHeight: ^uint64(0), // Max uint64 value (effectively -1 for unsigned integer)
 	}
 	
-	// Initialize recursive proof maps
+	// Initialize recursive proof maps for each level
 	for level := uint64(1); level <= config.RecursiveProofLevels; level++ {
-		archiver.recursiveProofs[level] = make(map[uint64][]byte)
+		a.recursiveProofs[level] = make(map[uint64][]byte)
 	}
 	
-	return archiver, nil
+	return a, nil
 }
 
 // Start begins the background archival process
@@ -199,16 +202,29 @@ func (a *ZKArchiver) generateProofsForNewBlocks(ctx context.Context) {
 		return
 	}
 	
-	// Check if we have enough new blocks to archive
-	if height <= lastArchived+a.config.BatchSize {
-		return // Not enough new blocks yet
-	}
-	
-	// Find range of blocks to archive
-	startHeight := lastArchived + 1
-	endHeight := startHeight + a.config.BatchSize - 1
-	if endHeight > height {
-		endHeight = height
+	// Special case: if lastArchivedHeight is at the initial value (max uint64)
+	// we need to start from the genesis block (height 0)
+	var startHeight, endHeight uint64
+	if lastArchived == ^uint64(0) {
+		// Start from genesis block (height 0)
+		startHeight = 0
+		endHeight = a.config.BatchSize - 1
+		if endHeight > height {
+			endHeight = height
+		}
+		log.Printf("[ZKArchiver] Initial archival starting from genesis block (0-%d)", endHeight)
+	} else {
+		// Check if we have enough new blocks to archive
+		if height <= lastArchived+a.config.BatchSize {
+			return // Not enough new blocks yet
+		}
+		
+		// Find range of blocks to archive
+		startHeight = lastArchived + 1
+		endHeight = startHeight + a.config.BatchSize - 1
+		if endHeight > height {
+			endHeight = height
+		}
 	}
 	
 	log.Printf("[ZKArchiver] Generating proof for blocks %d to %d", startHeight, endHeight)
@@ -227,6 +243,12 @@ func (a *ZKArchiver) generateProofsForNewBlocks(ctx context.Context) {
 	// Store a reference state point if needed
 	if endHeight%a.config.ReferencePoints == 0 {
 		a.storeReferenceState(ctx, endHeight)
+	}
+	
+	// Also store a reference state for genesis block if we just archived it
+	if startHeight == 0 {
+		a.storeReferenceState(ctx, 0)
+		log.Printf("[ZKArchiver] Stored reference state for genesis block")
 	}
 	
 	a.mu.Lock()
@@ -280,22 +302,27 @@ func (a *ZKArchiver) generateLevel1RecursiveProofs(ctx context.Context, lastArch
 	}
 	a.mu.RUnlock()
 	
-	// If we already have a recursive proof for this range, skip
+	// If we already have a recursive proof that covers everything, skip
 	if maxHeight <= lastRecursiveProof {
 		return
 	}
 	
-	// Generate level 1 recursive proof
-	startHeight := uint64(0) // Genesis
-	endHeight := maxHeight
+	// Calculate the target height for the new recursive proof
+	// This will be the highest multiple of the recursive batch size
+	targetHeight := (maxHeight / recursiveBatchSize) * recursiveBatchSize
+	
+	// Check if we already have a recursive proof at this level that covers this height
+	if targetHeight <= lastRecursiveProof {
+		return // No new proofs to generate
+	}
 	
 	log.Printf("[ZKArchiver] Worker %d generating L1 recursive proof for heights 0-%d", 
-		workerID, endHeight)
+		workerID, targetHeight)
 	
 	// Collect all base proofs needed
 	var baseProofs [][]byte
 	a.mu.RLock()
-	for h := uint64(0); h <= endHeight; h += a.config.BatchSize {
+	for h := uint64(0); h <= targetHeight; h += a.config.BatchSize {
 		proof, exists := a.zkProofs[h+a.config.BatchSize-1]
 		if !exists {
 			// Missing a proof, can't generate recursive proof
@@ -307,7 +334,7 @@ func (a *ZKArchiver) generateLevel1RecursiveProofs(ctx context.Context, lastArch
 	a.mu.RUnlock()
 	
 	// Generate recursive proof
-	recursiveProof, err := a.circuit.GenerateRecursiveProof(ctx, baseProofs, startHeight, endHeight)
+	recursiveProof, err := a.circuit.GenerateRecursiveProof(ctx, baseProofs, 0, targetHeight)
 	if err != nil {
 		log.Printf("[ZKArchiver] Worker %d failed to generate L1 recursive proof: %v", 
 			workerID, err)
@@ -316,12 +343,12 @@ func (a *ZKArchiver) generateLevel1RecursiveProofs(ctx context.Context, lastArch
 	
 	// Store the recursive proof
 	a.mu.Lock()
-	a.recursiveProofs[1][endHeight] = recursiveProof
+	a.recursiveProofs[1][targetHeight] = recursiveProof
 	a.metrics.RecursiveProofsGenerated++
 	a.mu.Unlock()
 	
 	log.Printf("[ZKArchiver] Worker %d successfully generated L1 recursive proof for heights 0-%d", 
-		workerID, endHeight)
+		workerID, targetHeight)
 }
 
 // generateHigherLevelRecursiveProofs creates higher level recursive proofs
@@ -413,9 +440,16 @@ func (a *ZKArchiver) generateHigherLevelRecursiveProofs(ctx context.Context, lev
 func (a *ZKArchiver) generateProofForRange(ctx context.Context, startHeight, endHeight uint64) error {
 	startTime := time.Now()
 	
+	if endHeight < startHeight {
+		return fmt.Errorf("invalid range: end height %d is less than start height %d", 
+			endHeight, startHeight)
+	}
+	
+	log.Printf("[ZKArchiver] Starting proof generation for range %d-%d", startHeight, endHeight)
+	
 	// Get starting state
 	var startState [sha256.Size]byte
-	if startHeight == 1 {
+	if startHeight == 0 {
 		// Genesis state
 		a.mu.RLock()
 		startState = a.referenceStates[0]
@@ -566,6 +600,26 @@ func (a *ZKArchiver) GetLastArchivedHeight() uint64 {
 func (a *ZKArchiver) VerifyHistoricalTransition(ctx context.Context, fromHeight, toHeight uint64) (bool, error) {
 	startTime := time.Now()
 	
+	// Special case for genesis block (height 0)
+	if fromHeight == 0 {
+		// Verify that we have the genesis block
+		genesisBlock, err := a.getBlockByHeight(ctx, 0)
+		if err != nil {
+			return false, fmt.Errorf("failed to get genesis block: %w", err)
+		}
+		log.Printf("[ZKArchiver] Starting verification from genesis block with state root %x", genesisBlock.StateRoot())
+		
+		// Check if we have the special genesis proof
+		a.mu.RLock()
+		_, hasGenesisProof := a.zkProofs[0]
+		a.mu.RUnlock()
+		
+		if !hasGenesisProof {
+			// Give a more descriptive error about missing genesis block proofs
+			log.Printf("[ZKArchiver] No proof available that includes genesis block (height 0)")
+		}
+	}
+	
 	// Strategy: Find the most efficient proof path
 	// 1. Try highest level recursive proof first (most efficient)
 	// 2. Fall back to lower level recursive proofs
@@ -602,6 +656,11 @@ func (a *ZKArchiver) VerifyHistoricalTransition(ctx context.Context, fromHeight,
 					fromHeight, toHeight, level, verifyTime)
 				return true, nil
 			}
+			
+			// If we failed but have a proof, log detailed error
+			if err != nil {
+				log.Printf("[ZKArchiver] Failed to verify with L%d recursive proof: %v", level, err)
+			}
 		}
 	}
 	
@@ -613,11 +672,20 @@ func (a *ZKArchiver) VerifyHistoricalTransition(ctx context.Context, fromHeight,
 	var proofs [][]byte
 	current := fromHeight
 	
+	// Make sure we have the zkProofs map populated
+	a.mu.RLock()
+	hasProofs := len(a.zkProofs) > 0
+	a.mu.RUnlock()
+	
+	if !hasProofs {
+		return false, fmt.Errorf("no proofs available, archiver may not have generated any proofs yet")
+	}
+	
 	for current < toHeight {
 		// Find the next proof that covers current
 		nextProofHeight := a.findNextProofHeight(current)
 		if nextProofHeight == 0 || nextProofHeight > toHeight {
-			return false, fmt.Errorf("missing proof chain from height %d to %d", current, toHeight)
+			return false, fmt.Errorf("proof range doesn't cover requested range: missing proof chain from height %d to %d", current, toHeight)
 		}
 		
 		a.mu.RLock()
@@ -648,6 +716,10 @@ func (a *ZKArchiver) VerifyHistoricalTransition(ctx context.Context, fromHeight,
 		
 		proofEndHeight := a.findNextProofHeight(proofStartHeight)
 		
+		// Add more detailed logging
+		log.Printf("[ZKArchiver] Verifying proof %d/%d for range %d-%d", 
+			i+1, len(proofs), proofStartHeight, proofEndHeight)
+		
 		valid, err := a.circuit.VerifyProof(ctx, proof, proofStartHeight, proofEndHeight)
 		if err != nil || !valid {
 			return false, fmt.Errorf("failed to verify proof for range %d-%d: %w",
@@ -675,8 +747,15 @@ func (a *ZKArchiver) findNextProofHeight(height uint64) uint64 {
 	
 	var nextHeight uint64
 	for h := range a.zkProofs {
-		// Find the lowest proof height that's >= the start of the batch containing height
-		batchStart := (height / a.config.BatchSize) * a.config.BatchSize
+		// Special handling for genesis block (height 0)
+		var batchStart uint64
+		if height == 0 {
+			batchStart = 0
+		} else {
+			// Find the lowest proof height that's >= the start of the batch containing height
+			batchStart = (height / a.config.BatchSize) * a.config.BatchSize
+		}
+		
 		if h >= batchStart && (nextHeight == 0 || h < nextHeight) {
 			nextHeight = h
 		}
@@ -758,7 +837,18 @@ func (a *ZKArchiver) GetMetrics() ZKArchiverMetrics {
 
 // Helper method to get block by height instead of ID
 func (a *ZKArchiver) getBlockByHeight(ctx context.Context, height uint64) (core.StatelessBlock, error) {
-	// First try to get all blocks at the specified height
+	// First check if the chain has a direct method to get blocks by height (used in tests)
+	type heightGetter interface {
+		GetBlockByHeight(ctx context.Context, height uint64) (core.StatelessBlock, error)
+	}
+	
+	// Type assertion to check if our chain implements the GetBlockByHeight method
+	if getter, ok := a.statelessChain.(heightGetter); ok {
+		// Use the direct method if available
+		return getter.GetBlockByHeight(ctx, height)
+	}
+	
+	// Fallback to the old method - get all blocks and find the right one
 	blocks, err := a.getAllBlocks(ctx)
 	if err != nil {
 		return nil, err
