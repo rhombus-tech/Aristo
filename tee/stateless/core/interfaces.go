@@ -53,6 +53,10 @@ type StatelessVerifier interface {
 	
 	// RegisterProofType registers a new proof type with the verifier
 	RegisterProofType(proofType string, verifier func(context.Context, []byte) (bool, error)) error
+	
+	// GetMetrics returns operational metrics for the verifier
+	// This is useful for monitoring and debugging verification performance
+	GetMetrics() interface{}
 }
 
 // StatelessBlock represents a block in the stateless blockchain

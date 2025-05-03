@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"runtime"
+	"sync"
 	
 	"github.com/ava-labs/avalanchego/ids"
 	
@@ -98,14 +100,39 @@ var _ core.StatelessProof = (*ExecutionProof)(nil)
 
 // Verify checks if the execution proof is valid
 func (p *ExecutionProof) Verify(ctx context.Context) (bool, error) {
-	// Verify the proof size
-	if p.Size() > MaxProofSize {
+	// 1. Size validation (ensuring protection against the 3.5GB vulnerability)
+	if p.Size() > MaxExecutionProofSize {
 		return false, ErrInvalidProofSize
 	}
 	
+	// 2. Input/output validation
+	if err := p.verifyInputsAndOutputs(); err != nil {
+		return false, err
+	}
+	
+	// 3. TEE measurement verification
+	if err := p.verifyTEEMeasurement(ctx); err != nil {
+		return false, fmt.Errorf("TEE measurement verification failed: %w", err)
+	}
+	
+	// 4. Signature verification
+	if err := p.verifySignature(ctx); err != nil {
+		return false, fmt.Errorf("signature verification failed: %w", err)
+	}
+	
+	// 5. State transition validation
+	if err := p.verifyStateTransition(); err != nil {
+		return false, fmt.Errorf("state transition verification failed: %w", err)
+	}
+	
+	return true, nil
+}
+
+// verifyInputsAndOutputs validates that inputs and outputs match their hashes
+func (p *ExecutionProof) verifyInputsAndOutputs() error {
 	// Verify inputs and outputs are present
 	if len(p.Inputs) == 0 || len(p.Outputs) == 0 {
-		return false, ErrInvalidInputs
+		return ErrInvalidInputs
 	}
 	
 	// Verify the input hash
@@ -118,7 +145,7 @@ func (p *ExecutionProof) Verify(ctx context.Context) (bool, error) {
 	copy(calculatedInputsHash[:], inputsHasher.Sum(nil))
 	
 	if calculatedInputsHash != p.InputsHash {
-		return false, fmt.Errorf("%w: inputs hash mismatch", ErrInvalidExecution)
+		return fmt.Errorf("%w: inputs hash mismatch", ErrInvalidExecution)
 	}
 	
 	// Verify the output hash
@@ -131,22 +158,270 @@ func (p *ExecutionProof) Verify(ctx context.Context) (bool, error) {
 	copy(calculatedOutputsHash[:], outputsHasher.Sum(nil))
 	
 	if calculatedOutputsHash != p.OutputsHash {
-		return false, fmt.Errorf("%w: outputs hash mismatch", ErrInvalidExecution)
+		return fmt.Errorf("%w: outputs hash mismatch", ErrInvalidExecution)
 	}
 	
-	// In a real implementation, we would also:
-	// 1. Verify the TEE measurements against a trusted attestation service
-	// 2. Verify the signature is valid for the claimed TEE
-	// 3. Verify the state transition is valid based on the inputs and outputs
+	return nil
+}
+
+// verifyTEEMeasurement verifies the TEE measurement against the attestation service
+func (p *ExecutionProof) verifyTEEMeasurement(ctx context.Context) error {
+	// Get attestation verifier from context
+	verifier, err := getTEEVerifierFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	
-	// For this implementation, we'll return true if the basic checks pass
-	// In a production environment, this would include full cryptographic verification
-	return true, nil
+	// Validate TEE type
+	if p.TEEType != TEETypeSGX && p.TEEType != TEETypeSEV && p.TEEType != TEETypeTDX {
+		return fmt.Errorf("invalid TEE type: %s", p.TEEType)
+	}
+	
+	// Check if the TEE measurement is trusted
+	isTrusted, err := verifier.VerifyMeasurement(ctx, p.TEEType, p.TEEMeasurement[:])
+	if err != nil {
+		return fmt.Errorf("measurement verification error: %w", err)
+	}
+	if !isTrusted {
+		return fmt.Errorf("untrusted measurement for %s TEE", p.TEEType)
+	}
+	
+	return nil
+}
+
+// verifySignature verifies the signature from the TEE
+func (p *ExecutionProof) verifySignature(ctx context.Context) error {
+	// 1. If signature is empty, reject immediately
+	if len(p.Signature) == 0 {
+		return errors.New("missing signature")
+	}
+	
+	// 2. Get signature verifier from context
+	verifier, err := getTEEVerifierFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	
+	// 3. Create message to verify (everything except signature)
+	signatureMessage := p.buildSignatureMessage()
+	
+	// 4. Verify signature using the appropriate verifier
+	isValid, err := verifier.VerifySignature(ctx, p.TEEType, p.TEEMeasurement[:], p.EnclaveID, signatureMessage, p.Signature)
+	if err != nil {
+		return fmt.Errorf("signature verification error: %w", err)
+	}
+	if !isValid {
+		return errors.New("invalid signature")
+	}
+	
+	return nil
+}
+
+// buildSignatureMessage builds the message that was signed by the TEE
+func (p *ExecutionProof) buildSignatureMessage() []byte {
+	// Create a buffer to build the message that was signed
+	var signatureMessage bytes.Buffer
+	
+	// Add fields to the message in the same order they're serialized
+	signatureMessage.Write(p.TxID[:])
+	signatureMessage.Write(p.InputsHash[:])
+	signatureMessage.Write(p.OutputsHash[:])
+	signatureMessage.Write(p.TEEMeasurement[:])
+	signatureMessage.Write([]byte(p.TEEType))
+	signatureMessage.Write(p.EnclaveID)
+	signatureMessage.Write([]byte(p.RegionID))
+	
+	// Add timestamp as 8-byte big-endian uint64
+	timestampBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestampBytes, p.Timestamp)
+	signatureMessage.Write(timestampBytes)
+	
+	// Add state roots
+	signatureMessage.Write(p.StateRoot[:])
+	signatureMessage.Write(p.PrevStateRoot[:])
+	
+	return signatureMessage.Bytes()
+}
+
+// verifyStateTransition verifies that the state transition is valid
+func (p *ExecutionProof) verifyStateTransition() error {
+	// 1. Verify the previous state root is not zero (except for genesis)
+	isZero := true
+	for _, b := range p.PrevStateRoot {
+		if b != 0 {
+			isZero = false
+			break
+		}
+	}
+	
+	if isZero && p.TxID != ids.Empty {
+		return fmt.Errorf("%w: previous state root is zero for non-genesis transaction", ErrInvalidExecution)
+	}
+	
+	// 2. Verify the state root is not zero
+	isZero = true
+	for _, b := range p.StateRoot {
+		if b != 0 {
+			isZero = false
+			break
+		}
+	}
+	
+	if isZero {
+		return fmt.Errorf("%w: state root cannot be zero", ErrInvalidExecution)
+	}
+	
+	// 3. Verify inputs and outputs consistency for state transition
+	if err := p.verifyInputOutputConsistency(); err != nil {
+		return err
+	}
+	
+	return nil
+}
+
+// verifyInputOutputConsistency verifies that inputs and outputs are consistent
+func (p *ExecutionProof) verifyInputOutputConsistency() error {
+	// Basic validation that inputs and outputs follow required patterns
+	// In a real system, this would validate the actual state transition logic
+	
+	// Rule 1: Every transaction must have at least one input and one output
+	if len(p.Inputs) == 0 || len(p.Outputs) == 0 {
+		return fmt.Errorf("%w: transaction must have inputs and outputs", ErrInvalidExecution)
+	}
+	
+	// Rule 2: Each input must be at least 4 bytes for type identification
+	for i, input := range p.Inputs {
+		if len(input) < 4 {
+			return fmt.Errorf("%w: input %d is too small (minimum 4 bytes)", ErrInvalidExecution, i)
+		}
+	}
+	
+	// Rule 3: Each output must be at least 4 bytes for type identification
+	for i, output := range p.Outputs {
+		if len(output) < 4 {
+			return fmt.Errorf("%w: output %d is too small (minimum 4 bytes)", ErrInvalidExecution, i)
+		}
+	}
+	
+	// Add more state transition validation rules here based on your specific business logic
+	
+	return nil
+}
+
+// TEEVerifier defines the interface for verifying TEE measurements and signatures
+type TEEVerifier interface {
+	// VerifyMeasurement verifies if a TEE measurement is trusted
+	VerifyMeasurement(ctx context.Context, teeType string, measurement []byte) (bool, error)
+	
+	// VerifySignature verifies a signature from a TEE
+	VerifySignature(ctx context.Context, teeType string, measurement []byte, enclaveID []byte, message []byte, signature []byte) (bool, error)
+}
+
+// getTEEVerifierFromContext extracts the TEE verifier from context
+func getTEEVerifierFromContext(ctx context.Context) (TEEVerifier, error) {
+	// Get TEE verifier from context
+	verifierValue := ctx.Value(ContextKeyAttestationService)
+	if verifierValue == nil {
+		return nil, errors.New("TEE verifier not found in context")
+	}
+	
+	// Type assertion
+	verifier, ok := verifierValue.(TEEVerifier)
+	if !ok {
+		return nil, errors.New("invalid TEE verifier type in context")
+	}
+	
+	return verifier, nil
 }
 
 // RootHash returns the state root resulting from this execution
 func (p *ExecutionProof) RootHash() [sha256.Size]byte {
 	return p.StateRoot
+}
+
+// BatchVerifyExecutionProofs verifies multiple execution proofs in parallel
+// Optimized for high-frequency trading scenarios with efficient batching
+func BatchVerifyExecutionProofs(ctx context.Context, proofs []*ExecutionProof) ([]bool, []error) {
+	if len(proofs) == 0 {
+		return []bool{}, []error{}
+	}
+	
+	// Determine optimal number of workers based on available cores
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 2 {
+		numWorkers = 2 // Minimum 2 workers
+	}
+	if numWorkers > 8 {
+		numWorkers = 8 // Maximum 8 workers to avoid excessive context switching
+	}
+	
+	// Calculate optimal chunk size for proofs distribution
+	chunkSize := calculateOptimalChunkSize(len(proofs), numWorkers)
+	
+	// Initialize results
+	results := make([]bool, len(proofs))
+	errors := make([]error, len(proofs))
+	
+	// Use wait group to synchronize workers
+	var wg sync.WaitGroup
+	
+	// Process proofs in chunks
+	for workerID := 0; workerID < numWorkers; workerID++ {
+		// Calculate chunk range for this worker
+		start := workerID * chunkSize
+		end := start + chunkSize
+		if end > len(proofs) {
+			end = len(proofs)
+		}
+		if start >= len(proofs) {
+			break
+		}
+		
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			
+			// Process each proof in this chunk
+			for i := start; i < end; i++ {
+				// Skip nil proofs
+				if proofs[i] == nil {
+					results[i] = false
+					errors[i] = fmt.Errorf("nil proof")
+					continue
+				}
+				
+				// Verify the proof
+				results[i], errors[i] = proofs[i].Verify(ctx)
+			}
+		}(start, end)
+	}
+	
+	// Wait for all workers to complete
+	wg.Wait()
+	
+	return results, errors
+}
+
+// calculateOptimalChunkSize calculates the optimal chunk size for batch processing
+func calculateOptimalChunkSize(totalItems, numWorkers int) int {
+	// Ensure at least 1 item per worker
+	minItemsPerWorker := 1
+	
+	// Calculate items per worker
+	itemsPerWorker := totalItems / numWorkers
+	
+	// If items per worker is less than minimum, adjust workers down
+	if itemsPerWorker < minItemsPerWorker {
+		itemsPerWorker = minItemsPerWorker
+	}
+	
+	// Max 100 items per worker to avoid excessive memory usage
+	maxItemsPerWorker := 100
+	if itemsPerWorker > maxItemsPerWorker {
+		itemsPerWorker = maxItemsPerWorker
+	}
+	
+	return itemsPerWorker
 }
 
 // ProofType returns the type of proof
@@ -421,6 +696,28 @@ func parseExecutionProofDirectFormat(data []byte) (*ExecutionProof, error) {
 	
 	return p, nil
 }
+
+
+
+const (
+	// TEECertificateVersionV1 is the version 1 of TEE certificates
+	TEECertificateVersionV1 = 1
+	
+	// MaxExecutionProofSize is the maximum size of an execution proof in bytes
+	MaxExecutionProofSize = 1024 * 1024 // 1MB
+	
+	// TEETypeSGX represents Intel SGX TEEs
+	TEETypeSGX = "sgx"
+	
+	// TEETypeSEV represents AMD SEV TEEs
+	TEETypeSEV = "sev"
+	
+	// TEETypeTDX represents Intel TDX TEEs
+	TEETypeTDX = "tdx"
+	
+	// ContextKeyAttestationService is the key for the attestation service in the context
+	ContextKeyAttestationService = "attestation_service"
+)
 
 // Size returns the size of the proof in bytes
 func (p *ExecutionProof) Size() uint64 {

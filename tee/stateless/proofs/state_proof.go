@@ -9,6 +9,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/rand"
+	"runtime"
+	"sync"
+	"time"
 	
 	// Local interfaces package
 	"github.com/rhombus-tech/vm/tee/stateless/core"
@@ -20,6 +24,9 @@ const (
 	
 	// StateProofType is the identifier for state transition proofs
 	StateProofType = "state"
+	
+	// MaxStateProofBatchSize is the maximum number of proofs that can be processed in a single batch
+	MaxStateProofBatchSize = 10000
 )
 
 var (
@@ -31,6 +38,12 @@ var (
 	
 	// ErrInvalidSignature indicates signature verification failed
 	ErrInvalidSignature = errors.New("invalid signature in proof")
+	
+	// ErrInvalidStateTransition indicates the state transition is invalid
+	ErrInvalidStateTransition = errors.New("invalid state transition")
+	
+	// ErrUntrustedMeasurement indicates the TEE measurement is not trusted
+	ErrUntrustedMeasurement = errors.New("untrusted TEE measurement")
 )
 
 // StateProof is a proof of a state transition
@@ -71,7 +84,7 @@ var _ core.StatelessProof = (*StateProof)(nil)
 
 // Verify checks if the state proof is valid
 func (p *StateProof) Verify(ctx context.Context) (bool, error) {
-	// Check for context cancellation
+	// 1. Check for context cancellation
 	select {
 	case <-ctx.Done():
 		return false, ctx.Err()
@@ -79,18 +92,135 @@ func (p *StateProof) Verify(ctx context.Context) (bool, error) {
 		// Continue processing
 	}
 	
-	// Verify the proof size with proper bounds checking
+	// 2. Verify the proof size with proper bounds checking (protection against 3.5GB vulnerability)
 	if p.Size() > MaxProofSize {
 		return false, ErrInvalidProofSize
 	}
 	
-	// Parameter validation with proper checking
-	if len(p.Signature) == 0 {
-		return false, ErrInvalidSignature
+	// 3. Structural validation
+	if err := p.validateStructure(); err != nil {
+		return false, err
 	}
 	
-	// Reconstruct the message that was signed
-	message := bytes.NewBuffer(nil)
+	// 4. TEE measurement verification
+	if err := p.verifyTEEMeasurement(ctx); err != nil {
+		return false, fmt.Errorf("TEE measurement verification failed: %w", err)
+	}
+	
+	// 5. Signature verification
+	if err := p.verifySignature(ctx); err != nil {
+		return false, fmt.Errorf("signature verification failed: %w", err)
+	}
+	
+	// 6. State transition validation
+	if err := p.verifyStateTransition(); err != nil {
+		return false, fmt.Errorf("state transition verification failed: %w", err)
+	}
+	
+	return true, nil
+}
+
+// validateStructure validates the basic structure of the state proof
+func (p *StateProof) validateStructure() error {
+	// Check signature existence
+	if len(p.Signature) == 0 {
+		return ErrInvalidSignature
+	}
+	
+	// Verify region ID is present
+	if p.RegionID == "" {
+		return errors.New("missing region ID")
+	}
+	
+	// Verify TEE type is valid
+	if p.TEEType != TEETypeSGX && p.TEEType != TEETypeSEV && p.TEEType != TEETypeTDX {
+		return fmt.Errorf("invalid TEE type: %s", p.TEEType)
+	}
+	
+	// Verify from/to roots are not identical (except for genesis block)
+	if bytes.Equal(p.FromRoot[:], p.ToRoot[:]) && !bytes.Equal(p.FromRoot[:], make([]byte, len(p.FromRoot))) {
+		return fmt.Errorf("%w: from and to roots are identical", ErrInvalidStateTransition)
+	}
+	
+	return nil
+}
+
+// verifyTEEMeasurement verifies the TEE measurement against the attestation service
+func (p *StateProof) verifyTEEMeasurement(ctx context.Context) error {
+	// Use the TEEVerifier from execution_proof.go
+	// Get attestation verifier from context
+	verifierValue := ctx.Value("attestation_service")
+	if verifierValue == nil {
+		return errors.New("TEE verifier not found in context")
+	}
+	
+	// Type assertion to the interface from execution_proof.go
+	var verifier interface {
+		VerifyMeasurement(ctx context.Context, teeType string, measurement []byte) (bool, error)
+	}
+	var ok bool
+	if verifier, ok = verifierValue.(interface{
+		VerifyMeasurement(ctx context.Context, teeType string, measurement []byte) (bool, error)
+	}); !ok {
+		return errors.New("invalid TEE verifier type in context")
+	}
+	
+	// Check if the TEE measurement is trusted
+	isTrusted, err := verifier.VerifyMeasurement(ctx, p.TEEType, p.TEEMeasurement[:])
+	if err != nil {
+		return fmt.Errorf("measurement verification error: %w", err)
+	}
+	if !isTrusted {
+		return fmt.Errorf("%w for %s TEE", ErrUntrustedMeasurement, p.TEEType)
+	}
+	
+	return nil
+}
+
+// Import the TEEVerifier interface from execution_proof.go via direct reference
+// Note: In a production environment, this would be in a shared package
+
+// verifySignature verifies the signature from the TEE
+func (p *StateProof) verifySignature(ctx context.Context) error {
+	// Use the TEEVerifier from execution_proof.go
+	// Get signature verifier from context
+	verifierValue := ctx.Value("attestation_service")
+	if verifierValue == nil {
+		return errors.New("TEE verifier not found in context")
+	}
+	
+	// Type assertion to the interface from execution_proof.go
+	var verifier interface {
+		VerifySignature(ctx context.Context, teeType string, measurement []byte, enclaveID []byte, message []byte, signature []byte) (bool, error)
+	}
+	var ok bool
+	if verifier, ok = verifierValue.(interface{
+		VerifySignature(ctx context.Context, teeType string, measurement []byte, enclaveID []byte, message []byte, signature []byte) (bool, error)
+	}); !ok {
+		return errors.New("invalid TEE verifier type in context")
+	}
+	
+	// Create message to verify
+	signatureMessage := p.buildSignatureMessage()
+	
+	// Verify signature using the appropriate verifier
+	isValid, err := verifier.VerifySignature(ctx, p.TEEType, p.TEEMeasurement[:], nil, signatureMessage, p.Signature)
+	if err != nil {
+		return fmt.Errorf("signature verification error: %w", err)
+	}
+	if !isValid {
+		return ErrInvalidSignature
+	}
+	
+	return nil
+}
+
+// buildSignatureMessage builds the message that was signed by the TEE
+func (p *StateProof) buildSignatureMessage() []byte {
+	// Create a buffer to build the message that was signed
+	var message bytes.Buffer
+	
+	// Add fields in the same order they're serialized
 	message.Write(p.FromRoot[:])
 	message.Write(p.ToRoot[:])
 	message.Write(p.TransitionID[:])
@@ -103,29 +233,132 @@ func (p *StateProof) Verify(ctx context.Context) (bool, error) {
 	message.WriteString(p.TEEType)
 	message.WriteString(p.RegionID)
 	
-	// For the signature verification, we need to know what type of key was used
-	// This would normally be looked up from a trusted measurement database
+	return message.Bytes()
+}
+
+// verifyStateTransition verifies that the state transition is valid
+func (p *StateProof) verifyStateTransition() error {
+	// Check if roots are non-zero (except for genesis state)
+	isFromRootZero := isZeroArray(p.FromRoot[:])
+	isToRootZero := isZeroArray(p.ToRoot[:])
 	
-	// Check if it's likely an Ed25519 signature (common for TEE attestation)
-	if len(p.Signature) == ed25519.SignatureSize {
-		// In a real implementation, we would retrieve the public key from a trusted source
-		// based on the enclave measurement
-		// For now, we'll consider the signature valid for demonstration purposes
-		// In production, this would verify against the actual public key
-		return true, nil
+	// Genesis block can have zero FromRoot, but must have non-zero ToRoot
+	if isFromRootZero && isToRootZero {
+		return fmt.Errorf("%w: both roots cannot be zero", ErrInvalidStateTransition)
 	}
 	
-	// Fall back to hash verification for testing purposes only
-	// This should never be used in production
-	hasher := sha256.New()
-	hasher.Write(message.Bytes())
-	expectedHashSig := hasher.Sum(nil)
-	
-	if !bytes.Equal(p.Signature, expectedHashSig) {
-		return false, ErrInvalidSignature
+	// For non-genesis blocks, FromRoot cannot be zero
+	if isFromRootZero && !isToRootZero && p.TransitionID != [32]byte{} {
+		return fmt.Errorf("%w: from root cannot be zero for non-genesis transition", ErrInvalidStateTransition)
 	}
 	
-	return true, nil
+	// ToRoot can never be zero
+	if isToRootZero {
+		return fmt.Errorf("%w: to root cannot be zero", ErrInvalidStateTransition)
+	}
+	
+	// Check timestamp is reasonable
+	if p.Timestamp == 0 {
+		return fmt.Errorf("%w: timestamp cannot be zero", ErrInvalidStateTransition)
+	}
+	
+	return nil
+}
+
+// isZeroArray checks if the byte array contains only zeros
+func isZeroArray(data []byte) bool {
+	for _, b := range data {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// BatchVerifyStateProofs verifies multiple state proofs in parallel
+// This is optimized for high-throughput verification in the timeserver architecture
+func BatchVerifyStateProofs(ctx context.Context, proofs []*StateProof) ([]bool, []error) {
+	if len(proofs) == 0 {
+		return []bool{}, []error{}
+	}
+	
+	// Cap batch size to prevent resource exhaustion attacks
+	if len(proofs) > MaxStateProofBatchSize {
+		return nil, nil // TODO: Consider returning an appropriate error
+	}
+	
+	// Determine optimal number of workers and chunk size for the current hardware
+	numWorkers := stateProofOptimalWorkerCount()
+	chunkSize := stateProofOptimalChunkSize(len(proofs), numWorkers)
+	
+	// Prepare result arrays
+	results := make([]bool, len(proofs))
+	errors := make([]error, len(proofs))
+	
+	// Create a worker pool and distribute the work
+	var wg sync.WaitGroup
+	for workerID := 0; workerID < numWorkers; workerID++ {
+		// Calculate the chunk for this worker
+		startIdx := workerID * chunkSize
+		endIdx := startIdx + chunkSize
+		if endIdx > len(proofs) {
+			endIdx = len(proofs) // Don't exceed array bounds
+		}
+		
+		// Skip if this worker has no work
+		if startIdx >= len(proofs) {
+			continue
+		}
+		
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			
+			// Process each proof in this worker's chunk
+			for i := start; i < end; i++ {
+				// Add jitter to avoid thundering herd on shared resources
+				if numWorkers > 4 {
+					jitter := time.Duration(rand.Intn(1000)) * time.Microsecond
+					time.Sleep(jitter)
+				}
+				
+				// Verify the proof and store the result
+				isValid, err := proofs[i].Verify(ctx)
+				results[i] = isValid
+				errors[i] = err
+			}
+		}(startIdx, endIdx)
+	}
+	
+	// Wait for all workers to complete
+	wg.Wait()
+	return results, errors
+}
+
+// stateProofOptimalWorkerCount determines the optimal number of workers for state proof verification
+func stateProofOptimalWorkerCount() int {
+	// Use 75% of available cores for this work
+	optimalCount := int(float64(runtime.NumCPU()) * 0.75)
+	
+	// Ensure at least 2 workers and not more than system cores
+	if optimalCount < 2 {
+		return 2
+	}
+	if optimalCount > runtime.NumCPU() {
+		return runtime.NumCPU()
+	}
+	
+	return optimalCount
+}
+
+// stateProofOptimalChunkSize determines optimal chunk size for state proof batch verification
+func stateProofOptimalChunkSize(batchSize, workerCount int) int {
+	// Simple calculation for now, can be refined based on empirical performance testing
+	chunkSize := batchSize / workerCount
+	if chunkSize < 1 {
+		return 1
+	}
+	return chunkSize
 }
 
 // RootHash returns the destination state root
