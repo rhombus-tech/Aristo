@@ -1,0 +1,439 @@
+// Copyright (C) 2025. All rights reserved.
+// See the file LICENSE for licensing terms.
+
+package integration
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/quickfixgo/quickfix"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/attestation"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/blockchain"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/brokerdealer"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/config"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/message"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/session"
+	"github.com/rhombus-tech/aristo/fix-gateway/pkg/snapshot"
+)
+
+// testEnvironment holds all components needed for integration testing
+type testEnvironment struct {
+	// Configuration
+	config config.FIXGatewayConfig
+	
+	// Components
+	blockchainServer      *httptest.Server
+	blockchainConnector   *blockchain.Connector
+	sessionManager        *session.Manager
+	brokerDealerManager   *brokerdealer.Manager
+	snapshotManager       *snapshot.SnapshotManager
+	
+	// Test data
+	blockchainRequests    []blockchainRequest
+	executionReports      []*executionreport.ExecutionReport
+	
+	// Cleanup
+	cleanup func()
+}
+
+// blockchainRequest captures requests to the mock blockchain API
+type blockchainRequest struct {
+	OrderID   string
+	Symbol    string
+	Price     int64
+	Quantity  int64
+	Timestamp time.Time
+}
+
+// setupTestEnvironment creates a complete test environment for integration testing
+func setupTestEnvironment(t *testing.T) *testEnvironment {
+	env := &testEnvironment{
+		blockchainRequests: []blockchainRequest{},
+		executionReports:   []*executionreport.ExecutionReport{},
+	}
+	
+	// Setup mock blockchain API server
+	env.blockchainServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/settlement" {
+			// Parse the settlement request
+			var req struct {
+				OrderID  string `json:"order_id"`
+				Symbol   string `json:"symbol"`
+				Price    int64  `json:"price"`
+				Quantity int64  `json:"quantity"`
+			}
+			
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			
+			// Record the request
+			env.blockchainRequests = append(env.blockchainRequests, blockchainRequest{
+				OrderID:   req.OrderID,
+				Symbol:    req.Symbol,
+				Price:     req.Price,
+				Quantity:  req.Quantity,
+				Timestamp: time.Now(),
+			})
+			
+			// Return success
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"confirmed", "tx_id":"mock-tx-` + req.OrderID + `"}`))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	
+	// Load test configuration
+	env.config = createTestConfig(env.blockchainServer.URL)
+	
+	// Initialize blockchain connector
+	blockchainCfg := blockchain.Config{
+		Endpoint:       env.blockchainServer.URL,
+		TimeoutSeconds: 5,
+		MaxRetries:     2,
+		RetryInterval:  time.Second,
+		SimulationMode: true,
+	}
+	
+	var err error
+	env.blockchainConnector, err = blockchain.NewConnector(blockchainCfg)
+	if err != nil {
+		t.Fatalf("Failed to create blockchain connector: %v", err)
+	}
+	
+	// Create a mock attestation provider
+	attestationProvider, err := attestation.NewTEEProvider(env.config.Attestation)
+	if err != nil {
+		t.Fatalf("Failed to create attestation provider: %v", err)
+	}
+	
+	// Create message handler
+	msgHandler := message.NewMessageHandler(attestationProvider)
+	
+	// Initialize session manager
+	env.sessionManager, err = session.NewManager(env.config, attestationProvider, msgHandler)
+	if err != nil {
+		t.Fatalf("Failed to create session manager: %v", err)
+	}
+	
+	// Create market session adapter
+	marketSession := &testMarketSession{
+		t:                t,
+		executionReports: &env.executionReports,
+		sessionManager:   env.sessionManager,
+	}
+	
+	// Initialize broker-dealer manager
+	env.brokerDealerManager, err = brokerdealer.NewManager(
+		env.config.BrokerDealer,
+		marketSession,
+		env.blockchainConnector,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create broker-dealer manager: %v", err)
+	}
+	
+	// Initialize snapshot manager
+	snapshotConfig := snapshot.DefaultSnapshotConfig()
+	snapshotConfig.SnapshotInterval = 5 * time.Second
+	
+	env.snapshotManager = snapshot.NewSnapshotManager(
+		"test-gateway-" + time.Now().Format("20060102-150405"),
+		env.sessionManager,
+		env.blockchainConnector,
+		snapshotConfig,
+	)
+	
+	// Setup cleanup function
+	env.cleanup = func() {
+		env.blockchainServer.Close()
+	}
+	
+	return env
+}
+
+// testMarketSession is a mock implementation of the MarketSession interface
+type testMarketSession struct {
+	t                *testing.T
+	executionReports *[]*quickfix.Message
+	sessionManager   *session.Manager
+}
+
+// SendAndVerify implements the brokerdealer.MarketSession interface
+func (ms *testMarketSession) SendAndVerify(msg *quickfix.Message) error {
+	// Log the message
+	ms.t.Logf("Market received message: %s", msg.String())
+	
+	// Extract message type
+	var msgType field.MsgTypeField
+	if err := msg.Header.GetField(field.NewMsgType(), &msgType); err != nil {
+		return fmt.Errorf("failed to get message type: %w", err)
+	}
+	
+	// If it's a new order, generate an execution report
+	if string(msgType) == string(enum.MsgType_NewOrderSingle) {
+		order, err := newordersingle.FromMessage(msg)
+		if err != nil {
+			return fmt.Errorf("failed to parse order: %w", err)
+		}
+		
+		// Extract order details
+		var clOrdID field.ClOrdIDField
+		if err := order.GetClOrdID(&clOrdID); err != nil {
+			return fmt.Errorf("failed to get ClOrdID: %w", err)
+		}
+		
+		var symbol field.SymbolField
+		if err := order.GetSymbol(&symbol); err != nil {
+			return fmt.Errorf("failed to get Symbol: %w", err)
+		}
+		
+		var side field.SideField
+		if err := order.GetSide(&side); err != nil {
+			return fmt.Errorf("failed to get Side: %w", err)
+		}
+		
+		var orderQty field.OrderQtyField
+		if err := order.GetOrderQty(&orderQty); err != nil {
+			return fmt.Errorf("failed to get OrderQty: %w", err)
+		}
+		
+		var price field.PriceField
+		if err := order.GetPrice(&price); err != nil {
+			return fmt.Errorf("failed to get Price: %w", err)
+		}
+		
+		var account field.AccountField
+		order.GetAccount(&account) // This is optional
+		
+		// Create execution report
+		execReport := executionreport.New(
+			field.NewOrderID(fmt.Sprintf("EXEC-%s", clOrdID)),
+			field.NewExecID(fmt.Sprintf("EID-%s", clOrdID)),
+			field.NewExecTransType(enum.ExecTransType_NEW),
+			field.NewExecType(enum.ExecType_FILL),
+			field.NewOrdStatus(enum.OrdStatus_FILLED),
+			field.NewSymbol(string(symbol)),
+			field.NewSide(side),
+			field.NewLeavesQty(0),
+			field.NewCumQty(orderQty),
+			field.NewAvgPx(price),
+		)
+		
+		execReport.SetClOrdID(clOrdID)
+		execReport.SetOrderQty(orderQty)
+		execReport.SetLastPx(price)
+		execReport.SetLastQty(orderQty)
+		
+		if len(account) > 0 {
+			execReport.SetAccount(account)
+		}
+		
+		// Add any broker-specific tags from the original order
+		var brokerIDField field.StringField
+		if msg.Body.GetField(9001, &brokerIDField) == nil {
+			var execBrokerField field.StringField
+			execBrokerField = brokerIDField
+			*ms.executionReports = append(*ms.executionReports, msg)
+		
+		// In a real test, we would send this to the broker-dealer
+		// For now, we'll just log it
+		ms.t.Logf("Market received execution report")
+	}
+	
+	return nil
+}
+
+// createTestConfig creates a test configuration
+func createTestConfig(blockchainURL string) config.FIXGatewayConfig {
+	cfg := config.FIXGatewayConfig{
+		Attestation: config.AttestationConfig{
+			Enabled:  true,
+			TEETypes: []string{"SGX", "SEV", "TDX"},
+		},
+		NASDAQ: config.NasdaqConfig{
+			PrimarySession: config.SessionConfig{
+				Host:       "localhost",
+				Port:       9001,
+				FIXVersion: "4.2",
+			},
+			SenderCompID: "ARISTO",
+			TargetCompID: "NASDAQ",
+		},
+		BrokerDealer: config.BrokerDealerConfig{
+			Enabled: true,
+			BrokerDealers: []config.BrokerDealer{
+				{
+					ID:             "BROKER1",
+					Name:           "Test Broker",
+					Active:         true,
+					SenderCompID:   "BROKER1",
+					TargetCompID:   "ARISTO",
+					SessionConfig: config.SessionConfig{
+						Host:       "localhost",
+						Port:       9002,
+						FIXVersion: "4.2",
+					},
+					AllowedAccounts: []string{"ACCT1", "ACCT2"},
+					CommissionRate:  0.0025,
+				},
+			},
+			RateLimitPerBroker: 100,
+			DropCopyEnabled: false,
+		},
+		Blockchain: config.BlockchainConfig{
+			Enabled:       true,
+			Endpoint:      blockchainURL,
+			Simulation:    true,
+			MaxRetries:    3,
+			RetryInterval: 1,
+		},
+	}
+}
+
+// TestEndToEndOrderFlow tests the full order flow from broker-dealer to settlement
+func TestEndToEndOrderFlow(t *testing.T) {
+	// Skip in short mode since this is a long-running integration test
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	
+	// Setup test environment
+	env := setupTestEnvironment(t)
+	defer env.cleanup()
+	
+	// Start the session manager, broker-dealer manager, and snapshot manager
+	if err := env.sessionManager.Start(); err != nil {
+		t.Fatalf("Failed to start session manager: %v", err)
+	}
+	defer env.sessionManager.Stop()
+	
+	if err := env.brokerDealerManager.Start(); err != nil {
+		t.Fatalf("Failed to start broker-dealer manager: %v", err)
+	}
+	defer env.brokerDealerManager.Stop()
+	
+	env.snapshotManager.Start()
+	defer env.snapshotManager.Stop()
+	
+	// Wait for everything to initialize
+	time.Sleep(1 * time.Second)
+	
+	// Get the broker from the manager
+	broker, found := env.brokerDealerManager.GetBroker("BROKER1")
+	if !found {
+		t.Fatalf("Failed to get broker")
+	}
+	if broker == nil {
+		t.Fatalf("Failed to get broker")
+	}
+	
+	// Create a simple order message for testing
+	orderMsg := quickfix.NewMessage()
+	orderMsg.Header.SetField(quickfix.Tag(35), quickfix.FIXString("D")) // NewOrderSingle
+	orderMsg.SetField(quickfix.Tag(11), quickfix.FIXString("TEST-ORDER-1")) // ClOrdID
+	orderMsg.SetField(quickfix.Tag(21), quickfix.FIXString("1")) // HandlInst
+	orderMsg.SetField(quickfix.Tag(55), quickfix.FIXString("AAPL")) // Symbol
+	orderMsg.SetField(quickfix.Tag(54), quickfix.FIXString("1")) // Side (Buy)
+	orderMsg.SetField(quickfix.Tag(60), quickfix.FIXUTCTimestamp(time.Now())) // TransactTime
+	orderMsg.SetField(quickfix.Tag(40), quickfix.FIXString("2")) // OrdType (Limit)
+	orderMsg.SetField(quickfix.Tag(38), quickfix.FIXString("100")) // OrderQty
+	orderMsg.SetField(quickfix.Tag(59), quickfix.FIXString("0")) // TimeInForce (Day)
+	orderMsg.SetField(quickfix.Tag(44), quickfix.FIXString("150.50")) // Price
+	orderMsg.SetField(quickfix.Tag(1), quickfix.FIXString("ACCT1")) // Account
+	
+	// Create a FIX session for messages
+	sessionID := quickfix.SessionID{
+		BeginString:  "FIX.4.2",
+		SenderCompID: "BROKER1",
+		TargetCompID: "ARISTO",
+	}
+	
+	// Process the order through the broker
+	msgErr := broker.HandleNewOrderSingle(orderMsg, sessionID)
+	if msgErr != nil {
+		t.Fatalf("Failed to process order: %v", msgErr)
+	}
+	
+	// Wait for processing to complete
+	time.Sleep(2 * time.Second)
+	
+	// Verify blockchain settlement was recorded
+	if len(env.blockchainRequests) == 0 {
+		t.Errorf("No blockchain settlements recorded")
+	} else {
+		settlement := env.blockchainRequests[0]
+		t.Logf("Blockchain settlement recorded: %+v", settlement)
+		
+		// Verify settlement details
+		if settlement.Symbol != "AAPL" {
+			t.Errorf("Wrong symbol in settlement: got %s, want AAPL", settlement.Symbol)
+		}
+		
+		// Price should be converted to int64 with 8 decimal places
+		expectedPrice := int64(150.50 * 1e8)
+		if settlement.Price != expectedPrice {
+			t.Errorf("Wrong price in settlement: got %d, want %d", settlement.Price, expectedPrice)
+		}
+		
+		// Quantity should be converted to int64
+		expectedQty := int64(100)
+		if settlement.Quantity != expectedQty {
+			t.Errorf("Wrong quantity in settlement: got %d, want %d", settlement.Quantity, expectedQty)
+		}
+	}
+	
+	// Get the latest snapshot from the snapshot manager
+	snapshot := env.snapshotManager.GetLatestSnapshot()
+	if snapshot == nil {
+		t.Errorf("Failed to get snapshot")
+	} else {
+		t.Logf("Snapshot created")
+		
+		// Verify that the state snapshot was created
+		if snapshot == nil {
+			t.Errorf("Expected snapshot, got nil")
+		}
+		// In a more complete test, we would verify that the state contains
+		// the order and execution information
+		t.Logf("Snapshot created successfully")
+	}
+}
+
+// TestOrderRejection tests the rejection flow
+func TestOrderRejection(t *testing.T) {
+	// Skip in short mode since this is a long-running integration test
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	
+	// Setup test environment
+	env := setupTestEnvironment(t)
+	defer env.cleanup()
+	
+	// TODO: Implement order rejection test
+	t.Log("Order rejection test not yet implemented")
+}
+
+// TestCancelRequest tests the cancel request flow
+func TestCancelRequest(t *testing.T) {
+	// Skip in short mode since this is a long-running integration test
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	
+	// Setup test environment
+	env := setupTestEnvironment(t)
+	defer env.cleanup()
+	
+	// TODO: Implement cancel request test
+	t.Log("Cancel request test not yet implemented")
+}
