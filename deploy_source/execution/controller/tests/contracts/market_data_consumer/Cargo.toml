@@ -1,0 +1,21 @@
+[package]
+name = "market_data_consumer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Only include these dependencies for wasm32 target
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+
+[profile.release]
+opt-level = 's'
+lto = true
+
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-s"]

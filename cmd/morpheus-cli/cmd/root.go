@@ -196,12 +196,9 @@ func init() {
         computeCmd,
         // ... other existing commands ...
     )
-
-    // Region command flags
-    createRegionCmd.Flags().String("sgx", "", "SGX endpoint")
-    createRegionCmd.Flags().String("sev", "", "SEV endpoint")
-    createRegionCmd.MarkFlagRequired("sgx")
-    createRegionCmd.MarkFlagRequired("sev")
+    
+    // Flag definitions have been moved to the respective command files
+    // to avoid duplicate definitions
 }
 
 func Execute() error {

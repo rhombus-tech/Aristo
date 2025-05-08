@@ -37,43 +37,43 @@ func NewClient(endpoint string) *Client {
 
 // OrderSettlementData represents order data to be stored on the blockchain
 type OrderSettlementData struct {
-	OrderID      string   `json:"orderId"`
+	OrderID      string   `json:"order_id"`
 	Symbol       string   `json:"symbol"`
 	Side         string   `json:"side"`
 	Price        *big.Int `json:"price,omitempty"`
 	Quantity     *big.Int `json:"quantity,omitempty"`
 	Timestamp    int64    `json:"timestamp"`
-	AttestedData []byte   `json:"attestedData"`
+	AttestedData []byte   `json:"attested_data"`
 	Signature    []byte   `json:"signature"`
-	PercentFill  float64  `json:"percentFill,omitempty"`
-	IsRejected   bool     `json:"isRejected,omitempty"`
-	RejectReason string   `json:"rejectReason,omitempty"`
+	PercentFill  float64  `json:"percent_fill,omitempty"`
+	IsRejected   bool     `json:"is_rejected,omitempty"`
+	RejectReason string   `json:"reject_reason,omitempty"`
 }
 
 // CreateSettlementPayload creates a blockchain transaction payload for an order settlement
 func (c *Client) CreateSettlementPayload(data *OrderSettlementData) ([]byte, error) {
 	// Create a simple JSON payload with the order data
 	payload := map[string]interface{}{
-		"orderID":     data.OrderID,
+		"order_id":     data.OrderID,
 		"symbol":      data.Symbol,
 		"side":        data.Side,
 		"timestamp":   data.Timestamp,
 		"attestation": hex.EncodeToString(data.Signature),
-		"percentFill": data.PercentFill,
-		"isRejected":  data.IsRejected,
+		"percent_fill": data.PercentFill,
+		"is_rejected":  data.IsRejected,
 	}
 
 	// Add price and quantity if present
 	if data.Price != nil {
-		payload["price"] = data.Price.String()
+		payload["price"] = data.Price.Int64()
 	}
 
 	if data.Quantity != nil {
-		payload["quantity"] = data.Quantity.String()
+		payload["quantity"] = data.Quantity.Int64()
 	}
 
 	if data.RejectReason != "" {
-		payload["rejectReason"] = data.RejectReason
+		payload["reject_reason"] = data.RejectReason
 	}
 
 	// Marshal to JSON
@@ -82,21 +82,10 @@ func (c *Client) CreateSettlementPayload(data *OrderSettlementData) ([]byte, err
 
 // SubmitTransaction submits a transaction to the blockchain
 func (c *Client) SubmitTransaction(ctx context.Context, payload []byte) (string, error) {
-	// 1. Prepare the request body
-	reqBody := struct {
-		Data string `json:"data"`
-	}{
-		Data: hex.EncodeToString(payload),
-	}
-
-	reqData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	// 2. Create and send the request
-	// Adjust the endpoint as needed to match your blockchain's API
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/submit", bytes.NewReader(reqData))
+	// Send the payload directly without wrapping
+	
+	// Create and send the request
+	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/settlement", bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

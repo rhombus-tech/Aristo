@@ -1,0 +1,10 @@
+{
+    "regionId": "east-1",
+    "parameterValidation": {
+        "enableLengthPrefixChecks": true,
+        "enableDirectFormatChecks": true
+    },
+    "attestation": {
+        "enableCrossAttestation": true
+    }
+}

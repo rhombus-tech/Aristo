@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -96,35 +97,93 @@ type ZKArchiverMetrics struct {
 }
 
 // NewZKArchiver creates a new ZK archival service
-func NewZKArchiver(
-	config ZKArchiveConfig,
-	statelessChain core.StatelessChain,
-	circuit ZKCircuit,
-) (*ZKArchiver, error) {
-	if config.BatchSize == 0 {
-		return nil, fmt.Errorf("batch size must be greater than 0")
+func NewZKArchiver(config ZKArchiveConfig, statelessChain core.StatelessChain, circuit ZKCircuit) (*ZKArchiver, error) {
+	if statelessChain == nil {
+		return nil, fmt.Errorf("stateless chain is required")
 	}
 	
-	// Initialize archiver state
-	a := &ZKArchiver{
-		config:          config,
-		statelessChain:  statelessChain,
-		circuit:         circuit,
-		zkProofs:        make(map[uint64][]byte),
-		referenceStates: make(map[uint64][sha256.Size]byte),
-		recursiveProofs: make(map[uint64]map[uint64][]byte),
-		metrics:         &ZKArchiverMetrics{},
-		shutdown:        make(chan struct{}),
-		// Start with lastArchivedHeight at -1 to force inclusion of genesis block
-		lastArchivedHeight: ^uint64(0), // Max uint64 value (effectively -1 for unsigned integer)
+	if circuit == nil {
+		return nil, fmt.Errorf("ZK circuit is required")
 	}
 	
-	// Initialize recursive proof maps for each level
+	// Create a map to store recursive proofs, keyed by level and end height
+	recursiveProofs := make(map[uint64]map[uint64][]byte)
 	for level := uint64(1); level <= config.RecursiveProofLevels; level++ {
-		a.recursiveProofs[level] = make(map[uint64][]byte)
+		recursiveProofs[level] = make(map[uint64][]byte)
 	}
+	
+	// First create the archiver instance
+	a := &ZKArchiver{
+		config:            config,
+		statelessChain:    statelessChain,
+		circuit:           circuit,
+		zkProofs:          make(map[uint64][]byte),
+		referenceStates:   make(map[uint64][sha256.Size]byte),
+		lastArchivedHeight: math.MaxUint64, // Setting to max forces archival from genesis block
+		recursiveProofs:   recursiveProofs,
+		metrics:          &ZKArchiverMetrics{},
+		shutdown:         make(chan struct{}),
+	}
+	
+	// Now that we have the archiver instance, get the genesis block
+	genesisBlock, err := a.getBlockByHeight(context.Background(), 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get genesis block: %w", err)
+	}
+	
+	// Store the genesis state
+	genesisState := genesisBlock.StateRoot()
+	a.referenceStates[0] = genesisState
+	
+	// ZKArchiver instance is already created above, just log initialization
+	log.Printf("[ZKArchiver] Initialized with genesis state at height 0")
 	
 	return a, nil
+}
+
+// NewZKArchiverWithTEE creates a new ZK archival service with a single TEE endpoint
+func NewZKArchiverWithTEE(config ZKArchiveConfig, statelessChain core.StatelessChain, teeEndpoint string) (*ZKArchiver, error) {
+	// Create a TEE polynomial circuit
+	circuit := NewTEEPolynomialCircuit(teeEndpoint, 
+		WithMaxBatchSize(int(config.BatchSize)),
+		WithAcceleration(true))
+	
+	return NewZKArchiver(config, statelessChain, circuit)
+}
+
+// NewZKArchiverWithDualTEE creates a new ZK archival service with dual TEE execution (SGX+SEV)
+// using the mesh network for enhanced security through cross-attestation
+func NewZKArchiverWithDualTEE(config ZKArchiveConfig, statelessChain core.StatelessChain, 
+	meshEndpoint string, region string) (*ZKArchiver, error) {
+	// Create a mesh-enabled TEE polynomial circuit with dual SGX+SEV execution
+	circuit := NewMeshTEEPolynomialCircuit(meshEndpoint, region,
+		WithMaxBatchSize(int(config.BatchSize)),
+		WithAcceleration(true),
+		WithMeshNetwork(true),
+		WithRegion(region))
+	
+	log.Printf("[ZKArchiver] Initializing with dual TEE execution (SGX+SEV) using mesh network at %s\n", meshEndpoint)
+	
+	return NewZKArchiver(config, statelessChain, circuit)
+}
+
+// NewZKArchiverWithAISupport creates a new ZK archival service with triple TEE execution (SGX+SEV+TDX)
+// optimized for AI workloads with TDX for computational efficiency and SGX/SEV for security verification
+func NewZKArchiverWithAISupport(config ZKArchiveConfig, statelessChain core.StatelessChain, 
+	meshEndpoint string, region string, aiModelSize int64, aiBatchSize int) (*ZKArchiver, error) {
+	// Create a mesh-enabled TEE polynomial circuit with triple TEE execution
+	// TDX will be used for high-memory AI workloads, SGX/SEV for verification
+	circuit := NewMeshTEEPolynomialCircuit(meshEndpoint, region,
+		WithMaxBatchSize(int(config.BatchSize)),
+		WithAcceleration(true),
+		WithMeshNetwork(true),
+		WithRegion(region),
+		WithAICapabilities())
+	
+	log.Printf("[ZKArchiver] Initializing with AI-optimized triple TEE execution (SGX+SEV+TDX) using mesh network at %s\n", meshEndpoint)
+	log.Printf("[ZKArchiver] Configured for AI workloads with model size: %d bytes, batch size: %d\n", aiModelSize, aiBatchSize)
+	
+	return NewZKArchiver(config, statelessChain, circuit)
 }
 
 // Start begins the background archival process

@@ -4,11 +4,13 @@ package stateless
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/logging"
+	"go.uber.org/zap"
 
 	// Local imports
 	"github.com/rhombus-tech/vm/coordination"
@@ -27,6 +30,8 @@ import (
 	"github.com/rhombus-tech/vm/tee/stateless/chain"
 	"github.com/rhombus-tech/vm/tee/stateless/core"
 	"github.com/rhombus-tech/vm/tee/stateless/witness"
+	rlnccore "github.com/rhombus-tech/vm/tee/rlnc/core"
+	rlncsecurity "github.com/rhombus-tech/vm/tee/rlnc/security"
 )
 
 // Production interfaces for external services
@@ -60,6 +65,12 @@ type MeshNetwork struct {
 	teeConfig *tee.TEEConfig
 	connectionsPerRegion int
 	
+	// RLNC integration for resilience against network failures
+	useRLNC bool
+	rlncEncoder *RLNCEncoder
+	rlncDecoder *RLNCDecoder
+	rlncParams RLNCParams
+	
 	// Network state
 	connections map[string][]*meshConnection
 	outboundAddresses map[string][]string
@@ -83,6 +94,18 @@ type MeshNetwork struct {
 	isRunning bool
 	stopChan  chan struct{}
 	shutdown  bool // Flag to indicate shutdown in progress
+	stats struct {
+		messagesSent     uint64
+		messagesReceived uint64
+		bytesSent        uint64
+		bytesReceived    uint64
+		// RLNC specific stats
+		rlncPacketsSent      uint64
+		rlncPacketsReceived  uint64
+		rlncDecodingSuccesses uint64
+		rlncDecodingFailures  uint64
+		mu              sync.Mutex
+	}
 }
 
 // meshConnection represents a connection to another region in the mesh network
@@ -121,15 +144,382 @@ type meshMessage struct {
 	cancel      context.CancelFunc
 }
 
+var (
+	errMeshNotRunning   = errors.New("mesh network is not running")
+	errMeshAlreadyRunning = errors.New("mesh network is already running")
+	errInvalidRegion     = errors.New("invalid region")
+	errTooManyConnections = errors.New("too many connections to region")
+	errMeshShutdown      = errors.New("mesh network is shutting down")
+	errRLNCEncoding      = errors.New("failed to encode data with RLNC")
+	errRLNCDecoding      = errors.New("failed to decode RLNC encoded data")
+)
+
+// RLNCEncoder wraps the RLNC core encoder to provide resilient message encoding
+type RLNCEncoder struct {
+	encoder        *rlnccore.Encoder
+	genSize        int
+	packetSize     int
+	securityParams rlnccore.SecurityParams
+	attestationSvc  rlncsecurity.AttestationService
+	mu             sync.Mutex
+}
+
+// EncodePacket produces a coded packet using the RLNC encoder
+func (e *RLNCEncoder) EncodePacket() ([]byte, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	
+	// Leverage the core RLNC encoder to generate an encoded packet
+	return e.encoder.EncodePacket()
+}
+
+// RLNCDecoder wraps the RLNC core decoder to provide resilient message decoding
+type RLNCDecoder struct {
+	decoders       map[string]*rlnccore.Decoder // Map of generationID -> decoder
+	genSize        int
+	packetSize     int
+	securityParams rlnccore.SecurityParams
+	mu             sync.Mutex
+}
+
+// AddPacket adds an encoded packet to the appropriate decoder based on generation ID
+func (d *RLNCDecoder) AddPacket(packet []byte) error {
+	if len(packet) < 16 { // At minimum, we need the generation ID
+		return fmt.Errorf("packet too small to contain generation ID")
+	}
+	
+	// Extract the generation ID (first 16 bytes)
+	generationID := string(packet[:16])
+	
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	
+	// Check if we have a decoder for this generation
+	decoder, exists := d.decoders[generationID]
+	if !exists {
+		// Create a new decoder for this generation
+		var err error
+		decoder, err = rlnccore.NewDecoder(d.genSize, d.packetSize, d.securityParams)
+		if err != nil {
+			return fmt.Errorf("failed to create decoder: %w", err)
+		}
+		d.decoders[generationID] = decoder
+	}
+	
+	// Add the packet to the decoder
+	return decoder.AddPacket(packet)
+}
+
+// IsComplete checks if we have received enough packets to decode a generation
+func (d *RLNCDecoder) IsComplete(generationID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	
+	decoder, exists := d.decoders[generationID]
+	if !exists {
+		return false
+	}
+	
+	// Try to decode and see if it succeeds
+	// This is a pragmatic approach since the packetsNeeded field is not exported
+	_, err := decoder.Decode()
+	return err == nil
+}
+
+// Decode decodes the original data from the received packets
+func (d *RLNCDecoder) Decode(generationID string) ([][]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	
+	decoder, exists := d.decoders[generationID]
+	if !exists {
+		return nil, fmt.Errorf("no decoder found for generation %s", generationID)
+	}
+	
+	// Try to decode the generation - this will return an error if we don't have enough packets
+	return decoder.Decode()
+}
+
+// RLNCParams defines the parameters for RLNC encoding/decoding
+type RLNCParams struct {
+	GenerationSize int // Number of packets in a generation
+	PacketSize     int // Maximum size of each packet
+	UseHomomorphicMAC bool // Whether to use homomorphic MAC for security
+	UseConstantTime   bool // Whether to use constant-time operations
+}
+
+// initRLNC initializes RLNC support for resilient communication
+func (m *MeshNetwork) initRLNC() {
+	// Default RLNC parameters
+	m.rlncParams = RLNCParams{
+		GenerationSize:    8,  // 8 packets per generation is a good balance
+		PacketSize:        1024, // 1KB packets by default
+		UseHomomorphicMAC: true,  // Enable homomorphic MAC for security
+		UseConstantTime:   true,  // Use constant-time operations for side-channel protection
+	}
+	
+	// Create RLNC decoder
+	m.rlncDecoder = &RLNCDecoder{
+		decoders:       make(map[string]*rlnccore.Decoder),
+		genSize:        m.rlncParams.GenerationSize,
+		packetSize:     m.rlncParams.PacketSize,
+		securityParams: createRLNCSecurityParams(m.rlncParams),
+		mu:             sync.Mutex{},
+	}
+}
+
+// encodeWithRLNC encodes a message using RLNC for resilient transmission
+func (m *MeshNetwork) encodeWithRLNC(msg *meshMessage) ([][]byte, []byte, error) {
+	if !m.useRLNC {
+		return nil, nil, fmt.Errorf("RLNC is disabled")
+	}
+	
+	// Serialize the mesh message
+	msgData, err := m.serializeMeshMessage(msg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to serialize message: %w", err)
+	}
+	
+	// Create an encoder for this message
+	encoder, generationID, err := m.createRLNCEncoder(msgData)
+	if err != nil {
+		return nil, nil, err
+	}
+	
+	// Generate encoded packets - we generate more than genSize for better resilience
+	// Typically 1.5x to 2x redundancy works well for lossy networks
+	numPackets := int(float64(m.rlncParams.GenerationSize) * 1.5)
+	packets := make([][]byte, 0, numPackets)
+	
+	for i := 0; i < numPackets; i++ {
+		packet, err := encoder.EncodePacket()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to encode packet %d: %w", i, err)
+		}
+		
+		// Prepend generation ID to each packet
+		packetWithID := append(generationID, packet...)
+		packets = append(packets, packetWithID)
+	}
+	
+	return packets, generationID, nil
+}
+
+// serializeMeshMessage serializes a mesh message to bytes
+func (m *MeshNetwork) serializeMeshMessage(msg *meshMessage) ([]byte, error) {
+	// Simple serialization - in production you would use a more efficient format
+	buf := bytes.NewBuffer(nil)
+	
+	// Write topic length and topic
+	topicBytes := []byte(msg.topic)
+	binary.Write(buf, binary.BigEndian, uint16(len(topicBytes)))
+	buf.Write(topicBytes)
+	
+	// Write source length and source
+	sourceBytes := []byte(msg.source)
+	binary.Write(buf, binary.BigEndian, uint16(len(sourceBytes)))
+	buf.Write(sourceBytes)
+	
+	// Write target length and target
+	targetBytes := []byte(msg.target)
+	binary.Write(buf, binary.BigEndian, uint16(len(targetBytes)))
+	buf.Write(targetBytes)
+	
+	// Write message ID
+	msgIDBytes := []byte(msg.msgID)
+	binary.Write(buf, binary.BigEndian, uint16(len(msgIDBytes)))
+	buf.Write(msgIDBytes)
+	
+	// Write TTL
+	binary.Write(buf, binary.BigEndian, int32(msg.ttl))
+	
+	// Write timestamp (seconds since epoch)
+	binary.Write(buf, binary.BigEndian, msg.timestamp.Unix())
+	
+	// Write isEncrypted flag
+	if msg.isEncrypted {
+		buf.WriteByte(1)
+	} else {
+		buf.WriteByte(0)
+	}
+	
+	// Write data length and data
+	binary.Write(buf, binary.BigEndian, uint32(len(msg.data)))
+	buf.Write(msg.data)
+	
+	return buf.Bytes(), nil
+}
+
+// deserializeMeshMessage deserializes bytes back to a mesh message
+func (m *MeshNetwork) deserializeMeshMessage(data []byte) (*meshMessage, error) {
+	buf := bytes.NewBuffer(data)
+	msg := &meshMessage{}
+	
+	// Read topic
+	var topicLen uint16
+	if err := binary.Read(buf, binary.BigEndian, &topicLen); err != nil {
+		return nil, err
+	}
+	topicBytes := make([]byte, topicLen)
+	if _, err := io.ReadFull(buf, topicBytes); err != nil {
+		return nil, err
+	}
+	msg.topic = string(topicBytes)
+	
+	// Read source
+	var sourceLen uint16
+	if err := binary.Read(buf, binary.BigEndian, &sourceLen); err != nil {
+		return nil, err
+	}
+	sourceBytes := make([]byte, sourceLen)
+	if _, err := io.ReadFull(buf, sourceBytes); err != nil {
+		return nil, err
+	}
+	msg.source = string(sourceBytes)
+	
+	// Read target
+	var targetLen uint16
+	if err := binary.Read(buf, binary.BigEndian, &targetLen); err != nil {
+		return nil, err
+	}
+	targetBytes := make([]byte, targetLen)
+	if _, err := io.ReadFull(buf, targetBytes); err != nil {
+		return nil, err
+	}
+	msg.target = string(targetBytes)
+	
+	// Read message ID
+	var msgIDLen uint16
+	if err := binary.Read(buf, binary.BigEndian, &msgIDLen); err != nil {
+		return nil, err
+	}
+	msgIDBytes := make([]byte, msgIDLen)
+	if _, err := io.ReadFull(buf, msgIDBytes); err != nil {
+		return nil, err
+	}
+	msg.msgID = string(msgIDBytes)
+	
+	// Read TTL
+	var ttl int32
+	if err := binary.Read(buf, binary.BigEndian, &ttl); err != nil {
+		return nil, err
+	}
+	msg.ttl = int(ttl)
+	
+	// Read timestamp
+	var timestamp int64
+	if err := binary.Read(buf, binary.BigEndian, &timestamp); err != nil {
+		return nil, err
+	}
+	msg.timestamp = time.Unix(timestamp, 0)
+	
+	// Read isEncrypted flag
+	isEncryptedByte, err := buf.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	msg.isEncrypted = (isEncryptedByte == 1)
+	
+	// Read data
+	var dataLen uint32
+	if err := binary.Read(buf, binary.BigEndian, &dataLen); err != nil {
+		return nil, err
+	}
+	msg.data = make([]byte, dataLen)
+	if _, err := io.ReadFull(buf, msg.data); err != nil {
+		return nil, err
+	}
+	
+	// Create context
+	msg.context, msg.cancel = context.WithCancel(context.Background())
+	
+	return msg, nil
+}
+
+// createRLNCEncoder creates a new RLNC encoder for the given data
+func (m *MeshNetwork) createRLNCEncoder(data []byte) (*RLNCEncoder, []byte, error) {
+	// Generate a unique generation ID
+	generationID := make([]byte, 16)
+	if _, err := rand.Read(generationID); err != nil {
+		return nil, nil, fmt.Errorf("failed to generate generation ID: %w", err)
+	}
+	
+	// Create security parameters
+	securityParams := createRLNCSecurityParams(m.rlncParams)
+	
+	// Initialize the encoder
+	encoder, err := rlnccore.NewEncoder(
+		m.rlncParams.GenerationSize,
+		m.rlncParams.PacketSize,
+		securityParams,
+		generationID,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create RLNC encoder: %w", err)
+	}
+	
+	// Split data into chunks
+	chunks := splitData(data, m.rlncParams.PacketSize)
+	
+	// Add packets to the encoder
+	for _, chunk := range chunks {
+		if err := encoder.AddPacket(chunk); err != nil {
+			return nil, nil, fmt.Errorf("failed to add packet to RLNC encoder: %w", err)
+		}
+	}
+	
+	return &RLNCEncoder{
+		encoder:        encoder,
+		genSize:        m.rlncParams.GenerationSize,
+		packetSize:     m.rlncParams.PacketSize,
+		securityParams: securityParams,
+		attestationSvc:  nil, // We'll add this later if needed
+		mu:             sync.Mutex{},
+	}, generationID, nil
+}
+
+// createRLNCSecurityParams creates security parameters for RLNC
+func createRLNCSecurityParams(params RLNCParams) rlnccore.SecurityParams {
+	return rlnccore.SecurityParams{
+		UseHomomorphicMAC: params.UseHomomorphicMAC,
+		UseConstantTime:   params.UseConstantTime,
+		MaxAgeSeconds:     300, // 5 minutes maximum age for security
+		// MAC key will be generated internally by the RLNC core
+	}
+}
+
+// splitData splits data into chunks of the given size
+func splitData(data []byte, chunkSize int) [][]byte {
+	if len(data) == 0 {
+		return nil
+	}
+	
+	chunks := make([][]byte, 0, (len(data)+chunkSize-1)/chunkSize)
+	
+	for i := 0; i < len(data); i += chunkSize {
+		end := i + chunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		
+		chunk := make([]byte, chunkSize)
+		copy(chunk, data[i:end])
+		chunks = append(chunks, chunk)
+	}
+	
+	return chunks
+}
+
 // NewMeshNetwork creates a new mesh network with the given configuration
 func NewMeshNetwork(log logging.Logger, nodeID string, teeConfig *tee.TEEConfig) *MeshNetwork {
 	network := &MeshNetwork{
 		NodeID:              nodeID,
-		Region:              "us-east", // Default region, would be configured in production
-		TEEType:             "sgx",     // Default TEE type, would be configured based on hardware
 		log:                 log,
 		teeConfig:           teeConfig,
 		connectionsPerRegion: 2,
+		useRLNC:             true, // Enable RLNC by default for resilience
+		TEEType:             "sgx", // Default TEE type, would be configured based on hardware
+		Region:              "us-east", // Default region, would be configured in production
 		connections:         make(map[string][]*meshConnection),
 		outboundAddresses:   make(map[string][]string),
 		messageQueue:        make(chan *meshMessage, 1000),
@@ -143,7 +533,12 @@ func NewMeshNetwork(log logging.Logger, nodeID string, teeConfig *tee.TEEConfig)
 		connMutex:           sync.RWMutex{},
 		processedLock:       sync.RWMutex{},
 	}
+	// Create attestation service
 	network.attestationService = attestation.NewAttestationService(log, teeConfig)
+	
+	// Initialize RLNC for resilient communication
+	network.initRLNC()
+	
 	return network
 }
 
@@ -439,50 +834,110 @@ func (m *MeshNetwork) processQueue() {
 // sendToRegion sends a message to a specific region
 func (m *MeshNetwork) sendToRegion(region string, msg *meshMessage) {
 	m.connMutex.RLock()
-	conns, exists := m.connections[region]
+	conns, ok := m.connections[region]
 	m.connMutex.RUnlock()
 	
-	if !exists {
-		m.log.Warn(fmt.Sprintf("Cannot send message to unknown region: %s", region))
-		m.messagesFailed.Add(1)
+	if !ok || len(conns) == 0 {
+		m.log.Warn(fmt.Sprintf("No connections to region %s", region))
 		return
 	}
 	
-	// In a production implementation, we would actually send the message over the TLS connection
+	// Check if we should use RLNC for resilient transmission
+	if m.useRLNC {
+		m.sendWithRLNC(region, conns, msg)
+		return
+	}
+	
+	// Fallback to traditional transmission if RLNC is disabled
+	// Serialize the message for transmission
+	// In production, this would include encryption and signature
+	data, err := m.serializeMeshMessage(msg)
+	if err != nil {
+		m.log.Error(fmt.Sprintf("Failed to serialize message: %v", err))
+		return
+	}
+	
+	// Send to all connections with this region for redundancy
 	for _, conn := range conns {
-		if conn.tlsConn != nil {
-			// 1. Serialize the message with proper length-prefixed format for dual-format compliance
-			msgBytes := make([]byte, 4+len(msg.data))
-			binary.LittleEndian.PutUint32(msgBytes[:4], uint32(len(msg.data)))
-			copy(msgBytes[4:], msg.data)
+		conn.tlsConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		
+		// Send length-prefixed message
+		lenBuf := make([]byte, 4)
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(data)))
+		
+		_, err := conn.tlsConn.Write(append(lenBuf, data...))
+		if err != nil {
+			m.log.Error(fmt.Sprintf("Failed to send to %s: %v", conn.endpoint, err))
+		}
+	}
+}
+
+// sendWithRLNC sends a message using RLNC for resilience against packet loss
+func (m *MeshNetwork) sendWithRLNC(region string, conns []*meshConnection, msg *meshMessage) {
+	// Encode the message with RLNC
+	packets, generationID, err := m.encodeWithRLNC(msg)
+	if err != nil {
+		m.log.Error(fmt.Sprintf("Failed to encode message with RLNC: %v", err))
+		return
+	}
+	
+	// Track how many packets were actually sent
+	var sentCount int32
+	
+	// For each connection to the target region, send a subset of the encoded packets
+	// This distributes different linear combinations across different network paths
+	for _, conn := range conns {
+		// Calculate how many packets to send to this connection
+		// Distribute packets evenly among connections with some redundancy
+		packetsPerConn := (len(packets) + len(conns) - 1) / len(conns)
+		// Ensure we send at least the minimum required for decoding
+		if packetsPerConn < m.rlncParams.GenerationSize {
+			packetsPerConn = m.rlncParams.GenerationSize
+		}
+		
+		// Set write deadline
+		conn.tlsConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		
+		// Send RLNC header with generation ID and packet count
+		header := bytes.NewBuffer(nil)
+		header.Write([]byte("RLNC"))  // Magic number indicating RLNC encoded content
+		header.Write(generationID)     // 16-byte generation ID
+		binary.Write(header, binary.BigEndian, uint16(packetsPerConn)) // Packet count
+		
+		// Send the header
+		lenBuf := make([]byte, 4)
+		binary.BigEndian.PutUint32(lenBuf, uint32(header.Len()))
+		_, err := conn.tlsConn.Write(append(lenBuf, header.Bytes()...))
+		if err != nil {
+			m.log.Error(fmt.Sprintf("Failed to send RLNC header to %s: %v", conn.endpoint, err))
+			continue
+		}
+		
+		// Send the packets
+		for i := 0; i < packetsPerConn && i < len(packets); i++ {
+			// Select a packet - we want different connections to get different packets
+			packetIndex := (i * len(conns) + int(atomic.LoadUint64(&m.stats.messagesSent)) % len(conns)) % len(packets)
+			packet := packets[packetIndex]
 			
-			// Prefix with topic information (this is a simplified protocol)
-			topicPrefix := fmt.Sprintf("TOPIC:%s\n", msg.topic)
-			fullMsg := append([]byte(topicPrefix), msgBytes...)
-			
-			// 2. Send over the secure channel with timeout
-			conn.tlsConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			_, err := conn.tlsConn.Write(fullMsg)
-			conn.tlsConn.SetWriteDeadline(time.Time{})
-			
+			// Send length-prefixed packet
+			lenBuf := make([]byte, 4)
+			binary.BigEndian.PutUint32(lenBuf, uint32(len(packet)))
+			_, err := conn.tlsConn.Write(append(lenBuf, packet...))
 			if err != nil {
-				m.log.Error(fmt.Sprintf("Failed to send message to region %s: %v", region, err))
-				m.messagesFailed.Add(1)
-				return
+				m.log.Error(fmt.Sprintf("Failed to send RLNC packet to %s: %v", conn.endpoint, err))
+				break
 			}
 			
-			// Update stats
-			m.messagesSent.Add(1)
+			atomic.AddInt32(&sentCount, 1)
 		}
 	}
 	
-	// Update last seen timestamp
-	for _, conn := range conns {
-		conn.lastSeen = time.Now()
-	}
+	// Log statistics about the transmission
+	m.log.Debug(fmt.Sprintf("Sent %d/%d RLNC packets for message %s to region %s", 
+		atomic.LoadInt32(&sentCount), len(packets), msg.msgID, region))
 	
-	// Log the action
-	m.log.Debug(fmt.Sprintf("Sent message to region %s: topic=%s", region, msg.topic))
+	// Track RLNC usage in stats
+	atomic.AddUint64(&m.stats.rlncPacketsSent, uint64(atomic.LoadInt32(&sentCount)))
 }
 
 // Publish sends a message to the mesh network
@@ -562,12 +1017,40 @@ func (m *MeshNetwork) Close() error {
 
 // GetStats provides statistics about the mesh network
 func (m *MeshNetwork) GetStats() map[string]uint64 {
+	m.stats.mu.Lock()
+	defer m.stats.mu.Unlock()
+	
 	return map[string]uint64{
-		"messages_sent":     m.messagesSent.Load(),
-		"messages_received": m.messagesReceived.Load(),
-		"messages_failed":   m.messagesFailed.Load(),
-		"round_trip_avg_ms": m.roundTripAvg.Load(),
-		"connected_regions":  uint64(len(m.connections)),
+		"messages_sent":     m.stats.messagesSent,
+		"messages_received": m.stats.messagesReceived,
+		"bytes_sent":        m.stats.bytesSent,
+		"bytes_received":    m.stats.bytesReceived,
+		"rlnc_packets_sent":      m.stats.rlncPacketsSent,
+		"rlnc_packets_received":  m.stats.rlncPacketsReceived,
+		"rlnc_decoding_successes": m.stats.rlncDecodingSuccesses,
+		"rlnc_decoding_failures":  m.stats.rlncDecodingFailures,
+		"rlnc_enabled":     func() uint64 {
+			if m.useRLNC {
+				return 1
+			}
+			return 0
+		}(),
+	}
+}
+
+// EnableRLNC enables or disables Random Linear Network Coding for resilient messaging
+func (m *MeshNetwork) EnableRLNC(enabled bool) {
+	m.connMutex.Lock()
+	defer m.connMutex.Unlock()
+	
+	// Only reinitialize if there's a change
+	if m.useRLNC != enabled {
+		m.useRLNC = enabled
+		
+		// If enabling RLNC, initialize the encoder/decoder
+		if enabled {
+			m.initRLNC()
+		}
 	}
 }
 
@@ -774,21 +1257,44 @@ func (l *StatelessVerificationLayer) handleStateTransitionNetworkActions(
 	// Create a length-prefixed payload for the full state update with all proofs
 	transitionPayload := buildLengthPrefixedTransitionPayload(currentRoot, stateRoot, serializedProofs, l.regionID, l.teeType)
 	
-	// Publish to several topics for different subscribers
-	topics := []string{
-		fmt.Sprintf("state:%s:%x", l.regionID, stateRoot),        // Region-specific state updates 
-		fmt.Sprintf("block:%s", blockID),                         // Specific block events
-		fmt.Sprintf("transition:%s:%s", l.regionID, blockID),     // Region-specific transitions
-		"global:state:updates",                                   // Global state update feed
-	}
-	
-	for _, topic := range topics {
-		err := l.meshNetwork.Publish(ctx, topic, transitionPayload)
+	// Use mesh network to broadcast if available
+	if l.meshNetwork != nil {
+		// Publish with RLNC protection (RLNC already enabled above)
+		transStartTime := time.Now()
+		err := l.meshNetwork.Publish(ctx, "state-transition", transitionPayload)
 		if err != nil {
-			l.log.Warn(fmt.Sprintf("Failed to publish state update to topic %s: %v", topic, err))
-		} else {
-			l.log.Debug(fmt.Sprintf("Published state update to topic %s: blockID=%s regionID=%s", 
-			topic, blockID, l.regionID))
+			l.log.Error("Failed to publish state transition", 
+				zap.Error(err))
+		}
+		
+		// Log performance metrics for the RLNC-protected transmission
+		if l.log != nil && err == nil {
+			l.log.Debug("RLNC state transition broadcast complete", 
+				zap.Duration("duration", time.Since(transStartTime)))
+			
+			// Get RLNC stats after the operation
+			stats := l.meshNetwork.GetStats()
+			l.log.Debug("RLNC transmission stats",
+				zap.Uint64("packets_sent", stats["rlnc_packets_sent"]),
+				zap.Uint64("packets_received", stats["rlnc_packets_received"]))
+		}
+	} else {
+		// Publish to several topics for different subscribers
+		topics := []string{
+			fmt.Sprintf("state:%s:%x", l.regionID, stateRoot),        // Region-specific state updates 
+			fmt.Sprintf("block:%s", blockID),                         // Specific block events
+			fmt.Sprintf("transition:%s:%s", l.regionID, blockID),     // Region-specific transitions
+			"global:state:updates",                                   // Global state update feed
+		}
+		
+		for _, topic := range topics {
+			err := l.meshNetwork.Publish(ctx, topic, transitionPayload)
+			if err != nil {
+				l.log.Warn(fmt.Sprintf("Failed to publish state update to topic %s: %v", topic, err))
+			} else {
+				l.log.Debug(fmt.Sprintf("Published state update to topic %s: blockID=%s regionID=%s", 
+				topic, blockID, l.regionID))
+			}
 		}
 	}
 	
@@ -796,6 +1302,7 @@ func (l *StatelessVerificationLayer) handleStateTransitionNetworkActions(
 	l.log.Info(fmt.Sprintf("Successfully published state transition notification for block %s with %d proofs", 
 		blockID, len(serializedProofs)))
 }
+
 // validateDualFormatParameter checks if a parameter follows our dual-format conventions
 // This is a critical validation step for ensuring parameter robustness
 // and compatibility with both WebAssembly contracts and Go tests
@@ -857,6 +1364,7 @@ func serializeDualFormatData(data []byte) ([]byte, error) {
 	// Check if already in length-prefixed format to avoid double-wrapping
 	if len(data) >= 4 {
 		length := binary.LittleEndian.Uint32(data[:4])
+		// Validate reasonable length (0 < len <= 1MB) to prevent 3.5GB vulnerability
 		if length > 0 && length <= 1024*1024 && int(length+4) == len(data) {
 			// Already in proper length-prefixed format
 			return data, nil
@@ -1084,6 +1592,21 @@ func (l *StatelessVerificationLayer) OnStateTransition(
 	ctx context.Context,
 	fromRoot, toRoot [sha256.Size]byte,
 ) error {
+	if l.log != nil {
+		l.log.Debug("State transition detected", 
+			zap.String("from_root", hex.EncodeToString(fromRoot[:])),
+			zap.String("to_root", hex.EncodeToString(toRoot[:])))
+	}
+	
+	// Track timing for state transition operations
+	operationStartTime := time.Now()
+	defer func() {
+		if l.log != nil {
+			l.log.Debug("State transition completed", 
+				zap.Duration("duration", time.Since(operationStartTime)))
+		}
+	}()
+	
 	// We'll log the transition details for auditing
 	l.log.Info(fmt.Sprintf("Starting state transition processing from=%x to=%x in region=%s", 
 		fromRoot, toRoot, l.regionID))
@@ -1097,6 +1620,21 @@ func (l *StatelessVerificationLayer) OnStateTransition(
 	// Log the state transition details
 	l.log.Info(fmt.Sprintf("Processing state transition: from=%x to=%x region=%s",
 		fromRoot, toRoot, l.regionID))
+	
+	// Enable RLNC for critical state transitions to ensure reliable delivery
+	// This happens within the TEE boundary for security/compliance
+	if l.meshNetwork != nil {
+		// Enable RLNC for this critical state transition
+		l.meshNetwork.EnableRLNC(true)
+		defer l.meshNetwork.EnableRLNC(false) // Revert after operation completes
+		
+		// Log that we're using RLNC for this critical transmission
+		if l.log != nil {
+			l.log.Info("Using RLNC for state transition broadcast",
+				zap.String("from_root", hex.EncodeToString(fromRoot[:8])), // First 8 bytes for brevity
+				zap.String("to_root", hex.EncodeToString(toRoot[:8])))
+		}
+	}
 
 	// Generate a real state proof with proper TEE attestation
 	stateProof, err := l.generator.GenerateStateWitness(

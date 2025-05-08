@@ -1,0 +1,235 @@
+syntax = "proto3";
+package proto;
+
+option go_package = "github.com/rhombus-tech/vm/tee/proto";
+
+import "tee_mesh.proto";
+
+// RegionFederation service defines the interface for cross-region communication
+service RegionFederation {
+  // DiscoverRegions discovers other regions in the federation
+  rpc DiscoverRegions(RegionDiscoveryRequest) returns (RegionDiscoveryResponse);
+  
+  // SynchronizeState synchronizes state for an object across regions
+  rpc SynchronizeState(RegionSyncRequest) returns (RegionSyncResponse);
+  
+  // ProposeStateChange proposes a state change to other regions
+  rpc ProposeStateChange(StateChangeProposal) returns (StateChangeResponse);
+  
+  // CreateFederatedSnapshot initiates creation of a federated snapshot
+  rpc CreateFederatedSnapshot(FederatedSnapshotRequest) returns (FederatedSnapshotResponse);
+  
+  // VerifyFederatedSnapshot verifies a federated snapshot
+  rpc VerifyFederatedSnapshot(VerifyFederatedSnapshotRequest) returns (VerifyFederatedSnapshotResponse);
+  
+  // QueryRegionState queries the state of an object in another region
+  rpc QueryRegionState(RegionStateQuery) returns (RegionStateResponse);
+  
+  // RequestConsensus requests consensus from other regions on a proposed value
+  rpc RequestConsensus(ConsensusRequest) returns (ConsensusResponse);
+  
+  // HeartbeatCheck verifies that a region is still available
+  rpc HeartbeatCheck(RegionHeartbeatRequest) returns (RegionHeartbeatResponse);
+}
+
+// RegionDiscoveryRequest is used to discover other regions
+message RegionDiscoveryRequest {
+  string federation_id = 1;
+  string source_region_id = 2;
+  string region_type = 3;       // e.g., "primary", "secondary", "backup"
+  repeated string capabilities = 4;
+  string api_version = 5;
+  bytes signature = 6;          // Signature for authentication
+}
+
+// RegionDiscoveryResponse provides information about available regions
+message RegionDiscoveryResponse {
+  bool success = 1;
+  string error_message = 2;
+  repeated RegionInfo regions = 3;
+  bytes signature = 4;          // Signature for authentication
+}
+
+// RegionInfo contains information about a region
+message RegionInfo {
+  string region_id = 1 [(gogoproto.jsontag) = "RegionID", (gogoproto.moretags) = "yaml:\"RegionID\""];
+  string endpoint = 2 [(gogoproto.jsontag) = "Endpoint", (gogoproto.moretags) = "yaml:\"Endpoint\""];
+  string status = 3 [(gogoproto.jsontag) = "Status", (gogoproto.moretags) = "yaml:\"Status\""];
+  bool admin_capabilities = 4 [(gogoproto.jsontag) = "AdminCapabilities", (gogoproto.moretags) = "yaml:\"AdminCapabilities\""];
+  int64 last_contact_time = 5 [(gogoproto.jsontag) = "LastContactTime", (gogoproto.moretags) = "yaml:\"LastContactTime\""];
+  int32 tee_count = 6 [(gogoproto.jsontag) = "TEECount", (gogoproto.moretags) = "yaml:\"TEECount\""];
+  repeated string capabilities = 7 [(gogoproto.jsontag) = "Capabilities", (gogoproto.moretags) = "yaml:\"Capabilities\""];
+}
+
+// RegionSyncRequest requests state synchronization with another region
+message RegionSyncRequest {
+  string federation_id = 1;
+  string source_region_id = 2;
+  string object_id = 3;
+  bytes current_state = 4;      // Current state of the object
+  int64 state_version = 5;      // Version number of the state
+  SyncMode sync_mode = 6;       // "push", "pull", or "bidirectional"
+  bytes delta_update = 7;       // Delta update instead of full state (optional)
+  bytes signature = 8;          // Signature for authentication
+}
+
+// SyncMode defines the mode of synchronization
+enum SyncMode {
+  PUSH = 0;                     // Push state to target
+  PULL = 1;                     // Pull state from target
+  BIDIRECTIONAL = 2;            // Synchronize in both directions
+}
+
+// RegionSyncResponse is returned after a sync operation
+message RegionSyncResponse {
+  bool success = 1;
+  string error_message = 2;
+  bytes updated_state = 3;      // Updated state if this is a pull or bidirectional sync
+  int64 state_version = 4;      // Version of the state
+  bool has_conflict = 5;        // Whether there was a conflict
+  bytes signature = 6;          // Signature for authentication
+}
+
+// StateChangeProposal proposes a state change to other regions
+message StateChangeProposal {
+  string federation_id = 1;
+  string source_region_id = 2;
+  string object_id = 3;
+  bytes new_state = 4;          // Proposed new state
+  int64 state_version = 5;      // Version number of the state
+  int64 proposal_id = 6;        // Unique ID for this proposal
+  int64 expiration_time = 7;    // When this proposal expires (Unix timestamp)
+  bytes signature = 8;          // Signature for authentication
+}
+
+// StateChangeResponse is the response to a state change proposal
+message StateChangeResponse {
+  bool accepted = 1;            // Whether the proposal was accepted
+  string error_message = 2;
+  int64 state_version = 3;      // Current version number after the change
+  bytes signature = 4;          // Signature for authentication
+}
+
+// FederatedSnapshotRequest requests creation of a federated snapshot
+message FederatedSnapshotRequest {
+  string federation_id = 1;
+  string source_region_id = 2;
+  repeated string target_regions = 3;
+  int64 request_id = 4;
+  int64 timeout_ms = 5;         // Timeout in milliseconds
+  bytes signature = 6;          // Signature for authentication
+}
+
+// FederatedSnapshotResponse contains the federated snapshot
+message FederatedSnapshotResponse {
+  bool success = 1;
+  string error_message = 2;
+  FederatedSnapshot snapshot = 3;
+  bytes signature = 4;          // Signature for authentication
+}
+
+// FederatedSnapshot represents a snapshot across multiple regions
+message FederatedSnapshot {
+  string federation_id = 1 [(gogoproto.jsontag) = "FederationID", (gogoproto.moretags) = "yaml:\"FederationID\""];
+  bytes snapshot_id = 2 [(gogoproto.jsontag) = "SnapshotID", (gogoproto.moretags) = "yaml:\"SnapshotID\""];
+  int64 timestamp = 3 [(gogoproto.jsontag) = "Timestamp", (gogoproto.moretags) = "yaml:\"Timestamp\""];
+  map<string, RegionalSnapshot> regional_snapshots = 4 [(gogoproto.jsontag) = "RegionalSnapshots", (gogoproto.moretags) = "yaml:\"RegionalSnapshots\""];
+  bytes global_state_root = 5 [(gogoproto.jsontag) = "GlobalStateRoot", (gogoproto.moretags) = "yaml:\"GlobalStateRoot\""];
+  bytes coordinator_signature = 6 [(gogoproto.jsontag) = "CoordinatorSignature", (gogoproto.moretags) = "yaml:\"CoordinatorSignature\""];
+  map<string, bytes> consensus_metadata = 7 [(gogoproto.jsontag) = "ConsensusMetadata", (gogoproto.moretags) = "yaml:\"ConsensusMetadata\""];
+}
+
+// RegionalSnapshot represents a snapshot for a region
+message RegionalSnapshot {
+  string region_id = 1 [(gogoproto.jsontag) = "RegionID", (gogoproto.moretags) = "yaml:\"RegionID\""];
+  bytes snapshot_id = 2 [(gogoproto.jsontag) = "SnapshotID", (gogoproto.moretags) = "yaml:\"SnapshotID\""];
+  int64 timestamp = 3 [(gogoproto.jsontag) = "Timestamp", (gogoproto.moretags) = "yaml:\"Timestamp\""];
+  repeated bytes tee_snapshot_ids = 4 [(gogoproto.jsontag) = "TEESnapshotIDs", (gogoproto.moretags) = "yaml:\"TEESnapshotIDs\""];
+  SnapshotSummary summary = 5 [(gogoproto.jsontag) = "SnapshotSummary", (gogoproto.moretags) = "yaml:\"SnapshotSummary\""];
+  bytes coordinator_signature = 6 [(gogoproto.jsontag) = "CoordinatorSignature", (gogoproto.moretags) = "yaml:\"CoordinatorSignature\""];
+  repeated bytes verifier_signatures = 7 [(gogoproto.jsontag) = "VerifierSignatures", (gogoproto.moretags) = "yaml:\"VerifierSignatures\""];
+  map<string, string> metadata = 8 [(gogoproto.jsontag) = "Metadata", (gogoproto.moretags) = "yaml:\"Metadata\""];
+  ConsensusInfo consensus_info = 9 [(gogoproto.jsontag) = "ConsensusInfo", (gogoproto.moretags) = "yaml:\"ConsensusInfo\""];
+  repeated bytes tee_snapshots = 10 [(gogoproto.jsontag) = "TEESnapshots", (gogoproto.moretags) = "yaml:\"TEESnapshots\""];
+}
+
+// SnapshotSummary summarizes a snapshot
+message SnapshotSummary {
+  bytes merkle_root = 1 [(gogoproto.jsontag) = "MerkleRoot", (gogoproto.moretags) = "yaml:\"MerkleRoot\""];
+  map<string, bytes> state_root_hashes = 2 [(gogoproto.jsontag) = "StateRootHashes", (gogoproto.moretags) = "yaml:\"StateRootHashes\""];
+  int32 object_count = 3 [(gogoproto.jsontag) = "ObjectCount", (gogoproto.moretags) = "yaml:\"ObjectCount\""];
+  int64 total_state_size = 4 [(gogoproto.jsontag) = "TotalStateSize", (gogoproto.moretags) = "yaml:\"TotalStateSize\""];
+  map<string, double> metrics = 5 [(gogoproto.jsontag) = "Metrics", (gogoproto.moretags) = "yaml:\"Metrics\""];
+}
+
+// VerifyFederatedSnapshotRequest requests verification of a federated snapshot
+message VerifyFederatedSnapshotRequest {
+  string federation_id = 1;
+  string source_region_id = 2;
+  bytes snapshot_id = 3;         // ID of the snapshot to verify
+  bytes signature = 4;           // Signature for authentication
+}
+
+// VerifyFederatedSnapshotResponse contains the verification result
+message VerifyFederatedSnapshotResponse {
+  bool valid = 1;
+  string error_message = 2;
+  int32 regions_verified = 3;    // Number of regions that verified the snapshot
+  bytes signature = 4;           // Signature for authentication
+}
+
+// RegionStateQuery queries the state of an object in another region
+message RegionStateQuery {
+  string federation_id = 1;
+  string source_region_id = 2;
+  string object_id = 3;
+  bool include_state = 4;        // Whether to include the actual state data
+  bytes signature = 5;           // Signature for authentication
+}
+
+// RegionStateResponse contains information about an object's state
+message RegionStateResponse {
+  bool exists = 1;
+  string error_message = 2;
+  int64 state_version = 3;       // Version of the state
+  int64 last_modified = 4;       // Unix timestamp of last modification
+  bytes state_data = 5;          // Only included if include_state was true
+  bytes signature = 6;           // Signature for authentication
+}
+
+// ConsensusRequest requests consensus from other regions
+message ConsensusRequest {
+  string federation_id = 1;
+  string source_region_id = 2;
+  string object_id = 3;
+  bytes proposed_value = 4;       // Value to get consensus on
+  int64 proposal_id = 5;          // Unique ID for this proposal
+  int64 expiration_time = 6;      // When this request expires (Unix timestamp)
+  string consensus_method = 7;    // Method for consensus
+  bytes signature = 8;            // Signature for authentication
+}
+
+// ConsensusResponse contains the consensus result
+message ConsensusResponse {
+  bool agreement = 1;             // Whether the region agrees with the proposal
+  string error_message = 2;
+  string reason = 3;              // Reason for agreement/disagreement
+  bytes counter_proposal = 4;     // Alternative value if not in agreement
+  bytes signature = 5;            // Signature for authentication
+}
+
+// RegionHeartbeatRequest checks if a region is still available
+message RegionHeartbeatRequest {
+  string federation_id = 1;
+  string source_region_id = 2;
+  int64 timestamp = 3;            // Unix timestamp
+  bytes signature = 4;            // Signature for authentication
+}
+
+// RegionHeartbeatResponse confirms the region is available
+message RegionHeartbeatResponse {
+  bool available = 1;
+  string status = 2;              // "healthy", "degraded", "maintenance"
+  int64 timestamp = 3;            // Unix timestamp
+  bytes signature = 4;            // Signature for authentication
+}

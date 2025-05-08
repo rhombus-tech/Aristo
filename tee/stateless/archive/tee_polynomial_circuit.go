@@ -7,37 +7,57 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/rhombus-tech/vm/tee/stateless/core"
 )
 
-// TEEPolynomialCircuit implements the ZKCircuit interface using
-// the TEE-backed polynomial commitment operations
+// TEEPolynomialCircuit implements the ZKCircuit interface using TEE-backed polynomial commitments
+// It supports SGX, SEV and TDX for different workload types including AI operations
 type TEEPolynomialCircuit struct {
-	// TEE controller endpoint
 	teeEndpoint string
+	client      *http.Client
+	teeClient   *MeshClient
+	
+	// AI workload specific configuration
+	aiCapable   bool
+	maxModelSize int64
+	batchSize   int
 	
 	// Maximum batch size for polynomial commitments
 	maxBatchSize int
 	
-	// Field element size in bytes (using pasta_curves::Fp)
+	// Size of field elements in bytes
 	fieldElementSize int
 	
-	// Whether to use hardware acceleration if available
+	// Whether to use acceleration
 	useAcceleration bool
+	
+	// Whether to use the mesh network
+	useMeshNetwork bool
+	
+	// Region for mesh network operations
+	region string
 	
 	// For performance tracking
 	lastOperationTime time.Duration
 }
 
 // NewTEEPolynomialCircuit creates a new ZK circuit using TEE-backed polynomial commitments
+// with a single TEE endpoint (legacy mode)
 func NewTEEPolynomialCircuit(teeEndpoint string, options ...CircuitOption) *TEEPolynomialCircuit {
 	circuit := &TEEPolynomialCircuit{
 		teeEndpoint:     teeEndpoint,
+		client:          &http.Client{},
+		teeClient:       nil,
+		aiCapable:       false,
+		maxModelSize:    0,
+		batchSize:       0,
 		maxBatchSize:    100,
 		fieldElementSize: 32, // pasta_curves::Fp is 32 bytes
 		useAcceleration: true,
+		useMeshNetwork:  false,
 	}
 	
 	// Apply options
@@ -48,10 +68,84 @@ func NewTEEPolynomialCircuit(teeEndpoint string, options ...CircuitOption) *TEEP
 	return circuit
 }
 
+// Helper function to check if a TEE type is in a slice
+func containsTEEType(types []TEEType, target TEEType) bool {
+	for _, t := range types {
+		if t == target {
+			return true
+		}
+	}
+	return false
+}
+
+// NewMeshTEEPolynomialCircuit creates a new TEEPolynomialCircuit with a MeshClient
+// It supports both standard and AI-optimized configurations
+func NewMeshTEEPolynomialCircuit(teeEndpoint string, region string, options ...CircuitOption) *TEEPolynomialCircuit {
+	// Create base circuit
+	circuit := NewTEEPolynomialCircuit(teeEndpoint, options...)
+	
+	// Configure for TEE mesh network usage
+	circuit.useMeshNetwork = true
+	circuit.region = region
+	
+	// Add TDX support for AI workloads if needed
+	aiCapable := false
+	for _, opt := range options {
+		// Check if this option enables AI capabilities by applying it to a temporary circuit
+		tempCircuit := &TEEPolynomialCircuit{}
+		opt(tempCircuit)
+		if tempCircuit.aiCapable {
+			aiCapable = true
+			break
+		}
+	}
+	
+	// Configure the mesh client
+	config := MeshClientConfig{
+		ConnectionTimeout:       60 * time.Second,
+		MaxRetries:              3,
+		RegionalPreference:      true,
+		CircuitBreakerThreshold: 5,
+		AttestationCacheTTL:     10 * time.Minute,
+	}
+	
+	// Add TDX support if AI capabilities are enabled
+	if aiCapable {
+		config.PreferredTEETypes = []TEEType{TEETypeIntelSGX, TEETypeSEV, TEETypeTDX}
+		config.AIEnabled = true
+		config.BatchSize = 128 // Default batch size for AI operations
+		config.MaxModelSize = 1 << 30 // 1GB default max model size
+	} else {
+		config.PreferredTEETypes = []TEEType{TEETypeIntelSGX, TEETypeSEV}
+	}
+	
+	// Create the mesh client
+	meshClient := NewMeshClient(teeEndpoint, region, config)
+	
+	// Set mesh client on circuit
+	circuit.teeClient = meshClient
+	
+	return circuit
+}
+
 // CircuitOption configures the TEE polynomial circuit
 type CircuitOption func(*TEEPolynomialCircuit)
 
-// WithMaxBatchSize sets the maximum batch size for polynomial operations
+// WithMeshNetwork enables or disables the use of the mesh network
+func WithMeshNetwork(use bool) CircuitOption {
+	return func(c *TEEPolynomialCircuit) {
+		c.useMeshNetwork = use
+	}
+}
+
+// WithRegion sets the region for mesh network operations
+func WithRegion(region string) CircuitOption {
+	return func(c *TEEPolynomialCircuit) {
+		c.region = region
+	}
+}
+
+// WithMaxBatchSize sets the maximum batch size for polynomial commitments
 func WithMaxBatchSize(size int) CircuitOption {
 	return func(c *TEEPolynomialCircuit) {
 		c.maxBatchSize = size
@@ -62,6 +156,15 @@ func WithMaxBatchSize(size int) CircuitOption {
 func WithAcceleration(use bool) CircuitOption {
 	return func(c *TEEPolynomialCircuit) {
 		c.useAcceleration = use
+	}
+}
+
+// WithAICapabilities enables AI workload support with TDX
+func WithAICapabilities() CircuitOption {
+	return func(c *TEEPolynomialCircuit) {
+		c.aiCapable = true
+		c.batchSize = 128 // Default batch size for AI operations
+		c.maxModelSize = 1 << 30 // 1GB default max model size
 	}
 }
 
