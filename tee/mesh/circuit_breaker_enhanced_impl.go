@@ -79,11 +79,27 @@ func NewEnhancedCircuitBreaker(name string, config *EnhancedCircuitBreakerConfig
 
 // Execute runs the provided function with enhanced circuit breaker protection
 func (ecb *EnhancedCircuitBreaker) Execute(ctx context.Context, operation func() error) error {
-	// First, check if we should allow the request
-	if !ecb.allowRequest() {
+	// First, check the current state to make decisions
+	ecb.stateMutex.RLock()
+	currentState := ecb.state
+	tripTime := ecb.tripTime
+	ecb.stateMutex.RUnlock()
+	
+	// If circuit is open and reset timeout hasn't elapsed, immediately reject
+	if currentState == CircuitOpen && time.Since(tripTime) <= ecb.config.ResetTimeout {
 		atomic.AddInt64(&ecb.metrics.TotalAttempts, 1)
 		ecb.recordRequestInWindow(false, nil, 0, nil)
 		return ErrCircuitBreakerOpen
+	}
+	
+	// In half-open state, check if we should allow this test request
+	if currentState == CircuitHalfOpen {
+		atomicCons := atomic.LoadInt64(&ecb.metrics.ConsecutiveSuccesses)
+		if atomicCons >= ecb.config.SuccessThreshold {
+			atomic.AddInt64(&ecb.metrics.TotalAttempts, 1)
+			ecb.recordRequestInWindow(false, nil, 0, nil)
+			return ErrCircuitBreakerOpen
+		}
 	}
 	
 	// Track concurrent load
@@ -159,6 +175,16 @@ func (ecb *EnhancedCircuitBreaker) Execute(ctx context.Context, operation func()
 			category = ecb.errorCategoryMapper(operationErr)
 		} else {
 			category = UnknownError
+		}
+		
+		// Check if we're in half-open state, if so, immediately trip back to open
+		ecb.stateMutex.RLock()
+		isHalfOpen := ecb.state == CircuitHalfOpen
+		ecb.stateMutex.RUnlock()
+		
+		if isHalfOpen {
+			// Force back to open state immediately
+			ecb.tripBreaker()
 		}
 		
 		// Record in sliding window
@@ -660,7 +686,17 @@ func (ecb *EnhancedCircuitBreaker) ForceOpen(reason string) {
 
 // Stop stops all background processes
 func (ecb *EnhancedCircuitBreaker) Stop() {
+	// Cancel the context to signal the health check goroutine to exit
 	if ecb.healthCheckCancelFunc != nil {
 		ecb.healthCheckCancelFunc()
+		ecb.healthCheckCancelFunc = nil
 	}
+	
+	// Stop the ticker to prevent resource leaks
+	if ecb.healthCheckTicker != nil {
+		ecb.healthCheckTicker.Stop()
+		ecb.healthCheckTicker = nil
+	}
+	
+	// The base CircuitBreaker doesn't have a Stop method to call
 }

@@ -2,113 +2,109 @@
 package mesh
 
 import (
-	"fmt"
+	"fmt" // Add fmt import for formatting
 	"time"
 
 	"github.com/rhombus-tech/vm/tee/proto"
 )
 
-// Type aliases to avoid conflict with protobuf-generated types
-// Use these type definitions in the codebase to avoid redeclaration errors
-type (
-	// ProtoRegionInfo is an alias for the protobuf-generated RegionInfo
-	ProtoRegionInfo = proto.RegionInfo
-	
-	// ProtoFederatedSnapshot is an alias for the protobuf-generated FederatedSnapshot
-	ProtoFederatedSnapshot = proto.FederatedSnapshot
-	
-	// ProtoRegionalSnapshot is an alias for the protobuf-generated RegionalSnapshot
-	ProtoRegionalSnapshot = proto.RegionalSnapshot
-	
-	// ProtoSnapshotSummary is an alias for the protobuf-generated SnapshotSummary
-	ProtoSnapshotSummary = proto.SnapshotSummary
-	
-	// ProtoConsensusInfo is an alias for the protobuf-generated ConsensusInfo, if it exists
-	// If ConsensusInfo is not defined in proto, this will need to be commented out
-	// ProtoConsensusInfo = proto.ConsensusInfo
-)
-
-// ProtoAdapters provides compatibility functions between our mesh types and the generated protobuf types.
-// This avoids having to refactor the entire codebase when protobuf definitions change.
-
-// ToProtoRegionalSnapshot converts our internal RegionalSnapshot to the proto-generated type
-func ToProtoRegionalSnapshot(snapshot *RegionalSnapshot) *proto.RegionalSnapshot {
+// InternalToProtoSnapshot converts our internal RegionalSnapshot to a protobuf-generated RegionalSnapshot
+func InternalToProtoSnapshot(snapshot *RegionalSnapshot) *proto.RegionalSnapshot {
 	if snapshot == nil {
 		return nil
 	}
 
+	// Create proto snapshot with basic fields
 	protoSnapshot := &proto.RegionalSnapshot{
-		RegionId:             snapshot.RegionID,
-		SnapshotId:           snapshot.SnapshotID,
-		Timestamp:            snapshot.Timestamp.Unix(),
-		TeeSnapshotIds:       snapshot.TEESnapshotIDs,
-		CoordinatorSignature: snapshot.CoordinatorSignature,
-		VerifierSignatures:   snapshot.VerifierSignatures,
-		Metadata:             snapshot.Metadata,
+		RegionId:   snapshot.RegionID,          // Map RegionID to RegionId
+		SnapshotId: snapshot.SnapshotID,        // Map SnapshotID to SnapshotId
+		Timestamp:  snapshot.Timestamp.UnixNano(), // Convert time.Time to int64 nanoseconds
 	}
 
-	// Handle optional fields
+	// Convert TEE snapshot IDs if present
+	if len(snapshot.TEESnapshotIDs) > 0 {
+		protoSnapshot.TeeSnapshotIds = make([][]byte, len(snapshot.TEESnapshotIDs))
+		copy(protoSnapshot.TeeSnapshotIds, snapshot.TEESnapshotIDs)
+	}
+
+	// Convert snapshot summary if present
 	if snapshot.SnapshotSummary != nil {
-		protoSnapshot.Summary = &proto.SnapshotSummary{
-			MerkleRoot:      snapshot.SnapshotSummary.MerkleRoot,
-			ObjectCount:     int32(snapshot.SnapshotSummary.ObjectCount),
-			TotalStateSize:  snapshot.SnapshotSummary.TotalStateSize,
+		summary := &proto.SnapshotSummary{
+			MerkleRoot:     snapshot.SnapshotSummary.MerkleRoot,
+			ObjectCount:    int32(snapshot.SnapshotSummary.ObjectCount), // int in Go, int32 in proto
+			TotalStateSize: snapshot.SnapshotSummary.TotalStateSize,
 		}
-		
-		// Handle state root hashes if present
+
+		// Convert state root hashes if present
 		if snapshot.SnapshotSummary.StateRootHashes != nil {
-			protoSnapshot.Summary.StateRootHashes = snapshot.SnapshotSummary.StateRootHashes
-		}
-		
-		// Handle metrics if present
-		if snapshot.SnapshotSummary.RegionalMetrics != nil {
-			metrics := make(map[string]float64)
-			for k, v := range snapshot.SnapshotSummary.RegionalMetrics {
-				metrics[k] = float64(v)
+			summary.StateRootHashes = make(map[string][]byte)
+			for k, v := range snapshot.SnapshotSummary.StateRootHashes {
+				summary.StateRootHashes[k] = v
 			}
-			protoSnapshot.Summary.Metrics = metrics
 		}
+
+		// Convert metrics if present
+		if snapshot.SnapshotSummary.RegionalMetrics != nil {
+			summary.Metrics = make(map[string]float64)
+			for k, v := range snapshot.SnapshotSummary.RegionalMetrics {
+				summary.Metrics[k] = v
+			}
+		}
+
+		protoSnapshot.Summary = summary
 	}
 
 	return protoSnapshot
 }
 
-// FromProtoRegionalSnapshot converts a proto-generated RegionalSnapshot to our internal type
-func FromProtoRegionalSnapshot(protoSnapshot *proto.RegionalSnapshot) *RegionalSnapshot {
+// ProtoToInternalSnapshot converts a protobuf-generated RegionalSnapshot to an internal RegionalSnapshot
+func ProtoToInternalSnapshot(protoSnapshot *proto.RegionalSnapshot) *RegionalSnapshot {
 	if protoSnapshot == nil {
 		return nil
 	}
 
+	// Create the internal snapshot with basic fields
 	snapshot := &RegionalSnapshot{
-		RegionID:             protoSnapshot.RegionId,
-		SnapshotID:           protoSnapshot.SnapshotId,
-		Timestamp:            time.Unix(protoSnapshot.Timestamp, 0),
-		TEESnapshotIDs:       protoSnapshot.TeeSnapshotIds,
-		CoordinatorSignature: protoSnapshot.CoordinatorSignature,
-		VerifierSignatures:   protoSnapshot.VerifierSignatures,
-		Metadata:             protoSnapshot.Metadata,
+		RegionID:       protoSnapshot.RegionId,     // Map RegionId to RegionID
+		SnapshotID:     protoSnapshot.SnapshotId,   // Map SnapshotId to SnapshotID
+		Timestamp:      time.Unix(0, protoSnapshot.Timestamp), // Convert int64 nanoseconds to time.Time
 	}
 
-	// Handle optional fields
+	// Convert TEE snapshot IDs if present
+	if len(protoSnapshot.TeeSnapshotIds) > 0 {
+		snapshot.TEESnapshotIDs = protoSnapshot.TeeSnapshotIds
+	}
+
+	// Convert snapshot summary if present
 	if protoSnapshot.Summary != nil {
-		snapshot.SnapshotSummary = &SnapshotSummary{
-			MerkleRoot:       protoSnapshot.Summary.MerkleRoot,
-			ObjectCount:      int(protoSnapshot.Summary.ObjectCount),
-			TotalStateSize:   protoSnapshot.Summary.TotalStateSize,
-			StateRootHashes:  protoSnapshot.Summary.StateRootHashes,
+		// Map state root hashes if present
+		stateRootHashes := make(map[string][]byte)
+		for k, v := range protoSnapshot.Summary.StateRootHashes {
+			stateRootHashes[k] = v
 		}
-		
-		// Handle metrics if present
-		if protoSnapshot.Summary.Metrics != nil {
-			regionalMetrics := make(map[string]string)
-			for k, v := range protoSnapshot.Summary.Metrics {
-				regionalMetrics[k] = formatMetric(v)
-			}
-			snapshot.SnapshotSummary.RegionalMetrics = regionalMetrics
+
+		// Map metrics if present
+		regionalMetrics := make(map[string]float64)
+		for k, v := range protoSnapshot.Summary.Metrics {
+			regionalMetrics[k] = v
+		}
+
+		// Set the summary fields
+		snapshot.SnapshotSummary = &SnapshotSummary{
+			MerkleRoot:      protoSnapshot.Summary.MerkleRoot,
+			StateRootHashes: stateRootHashes,
+			RegionalMetrics: regionalMetrics,
+			ObjectCount:     int(protoSnapshot.Summary.ObjectCount), // Convert int32 to int
+			TotalStateSize:  protoSnapshot.Summary.TotalStateSize,
 		}
 	}
 
 	return snapshot
+}
+
+// FromProtoRegionalSnapshot is an alias for ProtoToInternalSnapshot for backward compatibility
+func FromProtoRegionalSnapshot(protoSnapshot *proto.RegionalSnapshot) *RegionalSnapshot {
+	return ProtoToInternalSnapshot(protoSnapshot)
 }
 
 // ToProtoRegionInfo converts our internal RegionInfo to the proto-generated type
@@ -116,15 +112,14 @@ func ToProtoRegionInfo(info *RegionInfo) *proto.RegionInfo {
 	if info == nil {
 		return nil
 	}
-
+	
 	return &proto.RegionInfo{
-		RegionId:           info.RegionID,
+		RegionId:           info.RegionID,           // RegionID in Go, RegionId in proto 
 		Endpoint:           info.Endpoint,
 		Status:             info.Status,
 		AdminCapabilities:  info.AdminCapabilities,
-		LastContactTime:    info.LastContactTime.Unix(),
-		TeeCount:           int32(info.TEECount),
-		Capabilities:       info.Capabilities,
+		LastContactTime:    info.LastContactTime.Unix(), // time.Time in Go, int64 in proto
+		TeeCount:           int32(info.TEECount),       // TEECount in Go, TeeCount in proto
 	}
 }
 
@@ -133,15 +128,14 @@ func FromProtoRegionInfo(protoInfo *proto.RegionInfo) *RegionInfo {
 	if protoInfo == nil {
 		return nil
 	}
-
+	
 	return &RegionInfo{
-		RegionID:          protoInfo.RegionId,
+		RegionID:          protoInfo.RegionId,          // RegionId in proto, RegionID in Go
 		Endpoint:          protoInfo.Endpoint,
 		Status:            protoInfo.Status,
 		AdminCapabilities: protoInfo.AdminCapabilities,
-		LastContactTime:   time.Unix(protoInfo.LastContactTime, 0),
-		TEECount:          int(protoInfo.TeeCount),
-		Capabilities:      protoInfo.Capabilities,
+		LastContactTime:   time.Unix(protoInfo.LastContactTime, 0), // int64 in proto, time.Time in Go
+		TEECount:          int(protoInfo.TeeCount),                // TeeCount in proto, TEECount in Go
 	}
 }
 
@@ -150,33 +144,46 @@ func ToProtoFederatedSnapshot(snapshot *FederatedSnapshot) *proto.FederatedSnaps
 	if snapshot == nil {
 		return nil
 	}
-
+	
+	// Convert timestamp to Unix timestamp
+	var timestamp int64
+	if !snapshot.Timestamp.IsZero() {
+		timestamp = snapshot.Timestamp.Unix()
+	}
+	
+	// Create base proto federated snapshot with correct field mappings
 	protoSnapshot := &proto.FederatedSnapshot{
-		FederationId:        snapshot.FederationID,
-		SnapshotId:          snapshot.SnapshotID,
-		Timestamp:           snapshot.Timestamp.Unix(),
+		FederationId:        snapshot.FederationID,         // FederationID in Go, FederationId in proto
+		SnapshotId:          snapshot.SnapshotID,           // SnapshotID in Go, SnapshotId in proto
+		Timestamp:           timestamp,                     // time.Time in Go, int64 in proto
 		GlobalStateRoot:     snapshot.GlobalStateRoot,
 		CoordinatorSignature: snapshot.CoordinatorSignature,
 	}
-
-	// Convert the regional snapshots
-	if snapshot.RegionalSnapshots != nil {
-		regionalSnapshots := make(map[string]*proto.RegionalSnapshot)
-		for k, v := range snapshot.RegionalSnapshots {
-			regionalSnapshots[k] = ToProtoRegionalSnapshot(v)
+	
+	// Convert regional snapshots map
+	if snapshot.RegionalSnapshots != nil && len(snapshot.RegionalSnapshots) > 0 {
+		regionalSnapshotsMap := make(map[string]*proto.RegionalSnapshot)
+		for id, rs := range snapshot.RegionalSnapshots {
+			regionalSnapshotsMap[id] = InternalToProtoSnapshot(rs)
 		}
-		protoSnapshot.RegionalSnapshots = regionalSnapshots
+		protoSnapshot.RegionalSnapshots = regionalSnapshotsMap
 	}
-
-	// Handle consensus metadata if present
-	if snapshot.ConsensusMetadata != nil {
+	
+	// Convert consensus metadata if available
+	if snapshot.ConsensusMetadata != nil && len(snapshot.ConsensusMetadata) > 0 {
 		consensusMetadata := make(map[string][]byte)
 		for k, v := range snapshot.ConsensusMetadata {
-			consensusMetadata[k] = v
+			// Handle possible interface{} to []byte conversion
+			if byteVal, ok := v.([]byte); ok {
+				consensusMetadata[k] = byteVal
+			} else {
+				// Log warning about type mismatch
+				fmt.Printf("Warning: consensusMetadata value for key %s is not []byte\n", k)
+			}
 		}
 		protoSnapshot.ConsensusMetadata = consensusMetadata
 	}
-
+	
 	return protoSnapshot
 }
 
@@ -185,42 +192,49 @@ func FromProtoFederatedSnapshot(protoSnapshot *proto.FederatedSnapshot) *Federat
 	if protoSnapshot == nil {
 		return nil
 	}
-
+	
+	// Convert timestamp to time.Time
+	timestamp := time.Unix(protoSnapshot.Timestamp, 0)
+	
+	// Create base federated snapshot with correct field mappings
 	snapshot := &FederatedSnapshot{
-		FederationID:         protoSnapshot.FederationId,
-		SnapshotID:           protoSnapshot.SnapshotId,
-		Timestamp:            time.Unix(protoSnapshot.Timestamp, 0),
-		GlobalStateRoot:      protoSnapshot.GlobalStateRoot,
+		FederationID:        protoSnapshot.FederationId,         // FederationId in proto, FederationID in Go
+		SnapshotID:          protoSnapshot.SnapshotId,           // SnapshotId in proto, SnapshotID in Go
+		Timestamp:           timestamp,                          // int64 in proto, time.Time in Go
+		GlobalStateRoot:     protoSnapshot.GlobalStateRoot,
 		CoordinatorSignature: protoSnapshot.CoordinatorSignature,
 	}
-
-	// Convert the regional snapshots
-	if protoSnapshot.RegionalSnapshots != nil {
+	
+	// Convert regional snapshots map
+	if protoSnapshot.RegionalSnapshots != nil && len(protoSnapshot.RegionalSnapshots) > 0 {
 		regionalSnapshots := make(map[string]*RegionalSnapshot)
-		for k, v := range protoSnapshot.RegionalSnapshots {
-			regionalSnapshots[k] = FromProtoRegionalSnapshot(v)
+		for id, rs := range protoSnapshot.RegionalSnapshots {
+			regionalSnapshots[id] = FromProtoRegionalSnapshot(rs)
 		}
 		snapshot.RegionalSnapshots = regionalSnapshots
 	}
-
-	// Handle consensus metadata if present
-	if protoSnapshot.ConsensusMetadata != nil {
-		consensusMetadata := make(map[string][]byte)
+	
+	// Convert consensus metadata
+	if protoSnapshot.ConsensusMetadata != nil && len(protoSnapshot.ConsensusMetadata) > 0 {
+		// Need to convert from map[string][]byte to map[string]interface{}
+		consensusMetadata := make(map[string]interface{})
 		for k, v := range protoSnapshot.ConsensusMetadata {
 			consensusMetadata[k] = v
 		}
 		snapshot.ConsensusMetadata = consensusMetadata
 	}
 
+	// Note: Metadata field is not present in the proto structure
+	
 	return snapshot
 }
 
-// Helper function to format metrics as strings
+// formatMetric formats a metric value as a string with appropriate precision
 func formatMetric(value float64) string {
-	return formatFloat(value)
+	return fmt.Sprintf("%.2f", value)
 }
 
-// Helper function to format float values with appropriate precision
+// formatFloat formats a float value with appropriate precision based on magnitude
 func formatFloat(value float64) string {
-	return fmt.Sprintf("%.6f", value)
+	return fmt.Sprintf("%.3f", value)
 }

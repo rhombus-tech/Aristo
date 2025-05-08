@@ -1,204 +1,156 @@
 // Package mesh provides a mesh network for TEE-to-TEE communication
 package mesh
 
-// This file is temporarily commented out until proto code is generated
-// After running protoc to generate the Go code from region_federation.proto,
-// this file will be uncommented and implemented properly
+import (
+	"context"
+	"fmt"
+	"time"
 
-// TODO: The federation server implementation relies on generated code from the proto files.
-// This file contains method stubs that will be properly implemented once code generation is complete.
-
-// SyncMode defines the mode of synchronization
-type SyncMode int32
-
-const (
-	// SyncMode_PUSH pushes state to target
-	SyncMode_PUSH SyncMode = 0
-	// SyncMode_PULL pulls state from target
-	SyncMode_PULL SyncMode = 1
-	// SyncMode_BIDIRECTIONAL synchronizes in both directions
-	SyncMode_BIDIRECTIONAL SyncMode = 2
-)
-
-// Message type placeholders until protobuf generation is complete
-type (
-	RegionDiscoveryRequest struct {
-		FederationId   string
-		SourceRegionId string
-		RegionType     string
-		Capabilities   []string
-		ApiVersion     string
-		Signature      []byte
-	}
-
-	RegionDiscoveryResponse struct {
-		Success      bool
-		ErrorMessage string
-		Regions      []*RegionInfo
-		Signature    []byte
-	}
-
-	RegionInfo struct {
-		RegionId           string
-		Endpoint           string
-		Status             string
-		AdminCapabilities  bool
-		LastContactTime    int64
-		TeeCount           int32
-		Capabilities       []string
-	}
-
-	RegionSyncRequest struct {
-		FederationId   string
-		SourceRegionId string
-		ObjectId       string
-		CurrentState   []byte
-		StateVersion   int64
-		SyncMode       SyncMode
-		DeltaUpdate    []byte
-		Signature      []byte
-	}
-
-	RegionSyncResponse struct {
-		Success      bool
-		ErrorMessage string
-		UpdatedState []byte
-		StateVersion int64
-		HasConflict  bool
-		Signature    []byte
-	}
-
-	StateChangeProposal struct {
-		FederationId   string
-		SourceRegionId string
-		ObjectId       string
-		NewState       []byte
-		StateVersion   int64
-		ProposalId     int64
-		ExpirationTime int64
-		Signature      []byte
-	}
-
-	StateChangeResponse struct {
-		Accepted     bool
-		ErrorMessage string
-		StateVersion int64
-		Signature    []byte
-	}
-
-	FederatedSnapshotRequest struct {
-		FederationId   string
-		SourceRegionId string
-		TargetRegions  []string
-		RequestId      int64
-		TimeoutMs      int64
-		Signature      []byte
-	}
-
-	SnapshotSummary struct {
-		MerkleRoot      []byte
-		StateRootHashes map[string][]byte
-		ObjectCount     int32
-		TotalStateSize  int64
-		Metrics         map[string]float64
-	}
-
-	RegionalSnapshot struct {
-		RegionId       string
-		SnapshotId     []byte
-		Timestamp      int64
-		TeeSnapshotIds [][]byte
-		Summary        *SnapshotSummary
-	}
-
-	FederatedSnapshot struct {
-		FederationId        string
-		SnapshotId          []byte
-		Timestamp           int64
-		RegionalSnapshots   map[string]*RegionalSnapshot
-		GlobalStateRoot     []byte
-		CoordinatorSignature []byte
-		ConsensusMetadata    map[string][]byte
-	}
-
-	FederatedSnapshotResponse struct {
-		Success      bool
-		ErrorMessage string
-		Snapshot     *FederatedSnapshot
-		Signature    []byte
-	}
-
-	VerifyFederatedSnapshotRequest struct {
-		FederationId   string
-		SourceRegionId string
-		SnapshotId     []byte
-		Signature      []byte
-	}
-
-	VerifyFederatedSnapshotResponse struct {
-		Valid           bool
-		ErrorMessage    string
-		RegionsVerified int32
-		Signature       []byte
-	}
-
-	RegionStateQuery struct {
-		FederationId   string
-		SourceRegionId string
-		ObjectId       string
-		IncludeState   bool
-		Signature      []byte
-	}
-
-	RegionStateResponse struct {
-		Exists        bool
-		ErrorMessage  string
-		StateVersion  int64
-		LastModified  int64
-		StateData     []byte
-		Signature     []byte
-	}
-
-	ConsensusRequest struct {
-		FederationId   string
-		SourceRegionId string
-		ObjectId       string
-		ProposedValue  []byte
-		ProposalId     int64
-		Timeout        int64
-		Retries        int32
-		ConsensusMode  string
-		Signature      []byte
-	}
-
-	ConsensusResponse struct {
-		Agreement       bool
-		ErrorMessage    string
-		Reason          string
-		CounterProposal []byte
-		Signature       []byte
-	}
-
-	RegionHeartbeatRequest struct {
-		FederationId   string
-		SourceRegionId string
-		Timestamp      int64
-		Signature      []byte
-	}
-
-	RegionHeartbeatResponse struct {
-		Available  bool
-		Status     string
-		Timestamp  int64
-		Signature  []byte
-	}
+	"github.com/rhombus-tech/vm/tee/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // FederationServer implements the gRPC service for cross-region federation
-// This is a temporary placeholder until code generation is complete
+
 type FederationServer struct {
+	proto.UnimplementedRegionFederationServer
 	coordinator *FederationCoordinator
 	regionID    string
+}
+
+type RegionDiscoveryResponse struct {
+	Success      bool
+	ErrorMessage string
+	Regions      []*RegionInfo
+	Signature    []byte
+}
+
+// Using proto.RegionInfo directly instead of redefining it
+
+type RegionSyncRequest struct {
+	FederationId   string
+	SourceRegionId string
+	ObjectId       string
+	CurrentState   []byte
+	StateVersion   int64
+	SyncMode       proto.SyncMode
+	DeltaUpdate    []byte
+	Signature      []byte
+}
+
+type RegionSyncResponse struct {
+	Success      bool
+	ErrorMessage string
+	UpdatedState []byte
+	StateVersion int64
+	HasConflict  bool
+	Signature    []byte
+}
+
+type StateChangeProposal struct {
+	FederationId   string
+	SourceRegionId string
+	ObjectId       string
+	NewState       []byte
+	StateVersion   int64
+	ProposalId     int64
+	ExpirationTime int64
+	Signature      []byte
+}
+
+type StateChangeResponse struct {
+	Accepted     bool
+	ErrorMessage string
+	StateVersion int64
+	Signature    []byte
+}
+
+type FederatedSnapshotRequest struct {
+	FederationId   string
+	SourceRegionId string
+	TargetRegions  []string
+	RequestId      int64
+	TimeoutMs      int64
+	Signature      []byte
+}
+
+// Using proto.SnapshotSummary directly instead of redefining it
+
+// Using proto.RegionalSnapshot directly instead of redefining it
+
+// Using proto.FederatedSnapshot directly instead of redefining it
+
+type FederatedSnapshotResponse struct {
+	Success      bool
+	ErrorMessage string
+	Snapshot     *FederatedSnapshot
+	Signature    []byte
+}
+
+type VerifyFederatedSnapshotRequest struct {
+	FederationId   string
+	SourceRegionId string
+	SnapshotId     []byte
+	Signature      []byte
+}
+
+type VerifyFederatedSnapshotResponse struct {
+	Valid           bool
+	ErrorMessage    string
+	RegionsVerified int32
+	Signature       []byte
+}
+
+type RegionStateQuery struct {
+	FederationId   string
+	SourceRegionId string
+	ObjectId       string
+	IncludeState   bool
+	Signature      []byte
+}
+
+type RegionStateResponse struct {
+	Exists        bool
+	ErrorMessage  string
+	StateVersion  int64
+	LastModified  int64
+	StateData     []byte
+	Signature     []byte
+}
+
+type ConsensusRequest struct {
+	FederationId   string
+	SourceRegionId string
+	ObjectId       string
+	ProposedValue  []byte
+	ProposalId     int64
+	Timeout        int64
+	Retries        int32
+	ConsensusMode  string
+	Signature      []byte
+}
+
+type ConsensusResponse struct {
+	Agreement       bool
+	ErrorMessage    string
+	Reason          string
+	CounterProposal []byte
+	Signature       []byte
+}
+
+type RegionHeartbeatRequest struct {
+	FederationId   string
+	SourceRegionId string
+	Timestamp      int64
+	Signature      []byte
+}
+
+type RegionHeartbeatResponse struct {
+	Available  bool
+	Status     string
+	Timestamp  int64
+	Signature  []byte
 }
 
 // NewFederationServer creates a new federation server
@@ -422,19 +374,24 @@ func (fs *FederationServer) CreateFederatedSnapshot(
 
 	// Add regional snapshots
 	for regionID, regionalSnapshot := range snapshot.RegionalSnapshots {
-		protoRegionalSnapshot := &proto.RegionalSnapshot{
-			RegionId:        regionID,
-			SnapshotId:      regionalSnapshot.SnapshotID,
-			Timestamp:       regionalSnapshot.Timestamp.Unix(),
-			TeeSnapshotIds:  regionalSnapshot.TEESnapshotIDs,
-		}
+		// Create proto regional snapshot using the adapter function
+		protoRegionalSnapshot := InternalToProtoSnapshot(regionalSnapshot)
 
-		if regionalSnapshot.SnapshotSummary != nil {
+		// If for some reason the adapter fails, create a basic one manually
+		if protoRegionalSnapshot == nil {
+			protoRegionalSnapshot = &proto.RegionalSnapshot{
+				RegionId:   regionalSnapshot.RegionID,
+				SnapshotId: regionalSnapshot.SnapshotID,
+				Timestamp:  regionalSnapshot.Timestamp.UnixNano(),
+				TeeSnapshotIds: regionalSnapshot.TEESnapshotIDs,
+			}
+
+			// Initialize summary
 			protoRegionalSnapshot.Summary = &proto.SnapshotSummary{
 				MerkleRoot:      regionalSnapshot.SnapshotSummary.MerkleRoot,
-				StateRootHashes: make(map[string][]byte),
 				ObjectCount:     int32(regionalSnapshot.SnapshotSummary.ObjectCount),
 				TotalStateSize:  regionalSnapshot.SnapshotSummary.TotalStateSize,
+				StateRootHashes: make(map[string][]byte),
 				Metrics:         make(map[string]float64),
 			}
 
@@ -448,7 +405,6 @@ func (fs *FederationServer) CreateFederatedSnapshot(
 				protoRegionalSnapshot.Summary.Metrics[metric] = value
 			}
 		}
-
 		protoSnapshot.RegionalSnapshots[regionID] = protoRegionalSnapshot
 	}
 

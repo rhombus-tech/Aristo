@@ -226,97 +226,46 @@ func (fc *FederationCoordinator) ConnectToRegion(ctx context.Context, regionID s
 	
 	// Check if region's connection is valid and ready
 	if region.conn == nil {
-		err := fc.ConnectToRegion(ctx, regionID)
+		// Configure dial options
+		options := []grpc.DialOption{}
+		
+		// Add TLS if enabled
+		if fc.policy.FederationEncryptionEnabled {
+			tlsConfig := &tls.Config{
+				InsecureSkipVerify: false, // In production, this should be false and proper certs used
+			}
+			creds := credentials.NewTLS(tlsConfig)
+			options = append(options, grpc.WithTransportCredentials(creds))
+		} else {
+			options = append(options, grpc.WithInsecure())
+		}
+		
+		// Setup connection timeout for cross-region operations
+		timeout := time.Duration(fc.policy.CrossRegionTimeout) * time.Millisecond
+		connCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		
+		// Establish connection
+		conn, err := grpc.DialContext(connCtx, region.Endpoint, options...)
 		if err != nil {
-			return err
-		}
-	}
-	
-	// Configure dial options
-	options := []grpc.DialOption{}
-	
-	// Add TLS if enabled
-	if fc.policy.FederationEncryptionEnabled {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: false, // In production, this should be false and proper certs used
+			// Cannot use logger directly as it might not be initialized in tests
+			// Just return the error
+			return fmt.Errorf("failed to connect to region %s: %w", regionID, err)
 		}
 		
-		// Add certificate verification if available
-		if fc.tlsConfig != nil {
-			tlsConfig = fc.tlsConfig
-		}
+		// Update region's connection
+		region.conn = conn
+		// Note: client field will be set when proto generation is complete
+		// For now, we just set the connection and status
+		region.Status = "active"
 		
-		creds := credentials.NewTLS(tlsConfig)
-		options = append(options, grpc.WithTransportCredentials(creds))
-	} else {
-		// Insecure connection - only for development/testing
-		options = append(options, grpc.WithInsecure())
-	}
-	
-	// Set timeout based on policy
-	timeoutMs := fc.policy.CrossRegionTimeout
-	if timeoutMs <= 0 {
-		timeoutMs = 5000 // Default 5 seconds
-	}
-	
-	// Create timeout context for the dial operation
-	dialCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
-	defer cancel()
-	
-	// Connect to the remote region
-	conn, err := grpc.DialContext(dialCtx, region.Endpoint, options...)
-	if err != nil {
-		fc.globalLock.Lock()
-		region.Status = "connection_failed"
-		region.LastContactTime = time.Now()
-		fc.globalLock.Unlock()
-		
+		// Update metrics
 		fc.metrics.mu.Lock()
-		fc.metrics.RegionHealthStatus[regionID] = "connection_failed"
+		fc.metrics.RegionHealthStatus[regionID] = region.Status
 		fc.metrics.mu.Unlock()
-		
-		return fmt.Errorf("failed to connect to region %s at %s: %w", 
-			regionID, region.Endpoint, err)
 	}
 	
-	// Client will be created after proto generation
-	// For now, just store the connection
-	
-	// Update region info
-	fc.globalLock.Lock()
-	region.conn = conn
-	// region.RegionClient = client
-	region.Status = "active"
-	region.LastContactTime = time.Now()
-	fc.globalLock.Unlock()
-	
-	// After connecting, mark region metrics as active
-	fc.metrics.mu.Lock()
-	fc.metrics.RegionHealthStatus[regionID] = "active"
-	fc.metrics.mu.Unlock()
-	
-	// In the future, we'll verify the connection with a heartbeat
-	// For now, we'll just simulate a successful connection
-	
-	// Simulate successful heartbeat
-	// No need to call signRequest yet as it will be done when we implement the real RPC call
-	
-	// Simulation of successful response
-	err = nil
-	if err != nil {
-		// Connection succeeded but heartbeat failed
-		fc.globalLock.Lock()
-		region.Status = "degraded"
-		fc.globalLock.Unlock()
-		
-		fc.metrics.mu.Lock()
-		fc.metrics.RegionHealthStatus[regionID] = "degraded"
-		fc.metrics.mu.Unlock()
-		
-		// Log the error but don't return it since the connection was established
-		fmt.Printf("Warning: Connected to region %s but heartbeat failed: %v\n", regionID, err)
-	}
-	
+	// Connection established, return successfully
 	return nil
 }
 
