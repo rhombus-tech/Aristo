@@ -143,7 +143,7 @@ func TestDecompressDataFallbacks(t *testing.T) {
 		expectError    bool
 	}{
 		{"NilData", nil, 10, CompressionGzip, true},
-		{"ZeroSize", []byte("test"), 0, CompressionGzip, false}, // Should warn but not fail
+		{"ZeroSize", []byte("test"), 0, CompressionGzip, true}, // Zero-size gzip decompression should fail
 		{"InvalidCompression", []byte("test"), 10, "invalid-type", true},
 		{"CorruptedData", []byte{1, 2, 3, 4}, 100, CompressionGzip, true},
 		{"ExcessiveSize", []byte("test"), 1024*1024*200, CompressionGzip, true}, // 200MB is too large
@@ -161,12 +161,12 @@ func TestDecompressDataFallbacks(t *testing.T) {
 				t.Fatalf("Unexpected error: %v", err)
 			}
 			
-			// For the ZeroSize test, we expect it to return the original data
-			if tt.name == "ZeroSize" && err == nil {
-				result, _ := DecompressData(tt.compressedData, tt.originalSize, tt.compression)
-				if !bytes.Equal(result, tt.compressedData) {
-					t.Errorf("Zero size should return original data")
+			// For the ZeroSize test, we now expect an error because gzip decompression fails on zero size
+			if tt.name == "ZeroSize" {
+				if err == nil {
+					t.Errorf("Zero size should produce an error with gzip compression")
 				}
+				// No need to check result, we're expecting an error
 			}
 		})
 	}

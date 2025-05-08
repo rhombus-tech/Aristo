@@ -54,6 +54,9 @@ type MeshService struct {
 	lastStateHash []byte
 	// State management
 	stateManager StateManager
+	
+	// Batch processing
+	batchProcessor *BatchProcessor
 }
 
 // StateManager defines the interface for managing serialized state
@@ -277,7 +280,7 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 	
 	stateManager := NewDefaultStateManager()
 	
-	return &MeshService{
+	service := &MeshService{
 		teeID:           config.TEEID,
 		teeType:         config.TEEType,
 		regionID:        config.RegionID,
@@ -289,7 +292,12 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 		executionHandler: config.Handler,
 		stateCache:       make(map[string]stateInfo),
 		stateManager:     stateManager,
-	}, nil
+	}
+	
+	// Initialize the batch processor
+	service.batchProcessor = NewBatchProcessor(service)
+	
+	return service, nil
 }
 
 // Start starts the mesh service

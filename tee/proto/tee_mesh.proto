@@ -15,6 +15,12 @@ service TeeMesh {
   // ProxyExecute allows execution with automatic failover between TEEs
   rpc ProxyExecute(ProxyExecutionRequest) returns (DirectExecutionResponse) {}
   
+  // BatchDirectExecute processes multiple operations in a single batch
+  rpc BatchDirectExecute(BatchDirectExecutionRequest) returns (BatchDirectExecutionResponse) {}
+  
+  // BatchProxyExecute processes a batch with automatic failover between TEEs
+  rpc BatchProxyExecute(BatchProxyExecutionRequest) returns (BatchDirectExecutionResponse) {}
+  
   // Ping is a simple health check
   rpc Ping(PingRequest) returns (PingResponse) {}
   
@@ -181,4 +187,103 @@ message AccumulatorElement {
   bytes measurement = 2;         // TEE measurement
   string enclave_type = 3;       // Type of enclave (SGX, SEV)
   uint64 timestamp = 4;          // Timestamp when added
+}
+
+// BatchDirectExecutionRequest contains multiple DirectExecutionRequests to be executed as a batch
+message BatchDirectExecutionRequest {
+  string sender_id = 1;                                  // ID of the requesting TEE
+  repeated BatchOperation operations = 2;                // Batch of operations to execute
+  string region_id = 3;                                  // Region ID
+  map<string, bytes> shared_parameters = 4;              // Parameters shared across multiple operations
+  BatchOptions options = 5;                              // Batch execution options
+}
+
+// BatchOperation defines a single operation within a batch
+message BatchOperation {
+  string operation_id = 1;                               // Unique ID for this operation within the batch
+  string id_to = 2;                                      // Contract ID or object ID
+  string function_call = 3;                              // Function to call
+  bytes parameters = 4;                                  // Function parameters (can reference shared parameters)
+  bool detailed_proof = 5;                               // Whether to include detailed proof
+  bytes expected_hash = 6;                               // Expected state hash (optional)
+  repeated string parameter_references = 7;              // References to shared parameters
+  repeated string dependencies = 8;                      // IDs of operations this one depends on
+}
+
+// BatchOptions defines options for executing a batch
+message BatchOptions {
+  BatchExecutionMode execution_mode = 1;                 // How to execute the batch
+  BatchErrorHandling error_handling = 2;                 // How to handle errors in the batch
+  uint32 max_concurrent_operations = 3;                  // Maximum parallel operations (0 = unlimited)
+  bool preserve_order = 4;                               // Whether to preserve execution order
+  uint32 timeout_ms = 5;                                 // Overall timeout in milliseconds
+}
+
+// BatchExecutionMode defines how a batch should be executed
+enum BatchExecutionMode {
+  BATCH_MODE_PARALLEL = 0;                               // Execute operations in parallel when possible
+  BATCH_MODE_SEQUENTIAL = 1;                             // Execute operations in sequence
+  BATCH_MODE_OPTIMIZED = 2;                              // Let the system optimize the execution plan
+}
+
+// BatchErrorHandling defines how errors should be handled within a batch
+enum BatchErrorHandling {
+  BATCH_ERROR_FAIL_FAST = 0;                             // Stop executing on first error
+  BATCH_ERROR_CONTINUE = 1;                              // Continue executing other operations on error
+  BATCH_ERROR_ROLLBACK = 2;                              // Attempt to roll back on error
+}
+
+// BatchDirectExecutionResponse contains results of batch execution
+message BatchDirectExecutionResponse {
+  bool overall_success = 1;                              // Whether the entire batch was successful
+  repeated BatchOperationResult results = 2;             // Results for each operation
+  uint64 total_execution_time_ns = 3;                    // Total execution time in nanoseconds
+  uint64 batch_processing_overhead_ns = 4;               // Overhead from batch processing
+  float compression_ratio = 5;                           // Network compression ratio achieved
+  uint32 operations_succeeded = 6;                       // Number of successful operations
+  uint32 operations_failed = 7;                          // Number of failed operations
+  BatchStatistics statistics = 8;                        // Detailed statistics about the batch execution
+}
+
+// BatchOperationResult contains the result of a single operation within a batch
+message BatchOperationResult {
+  string operation_id = 1;                               // ID of the operation (matches request)
+  string timestamp = 2;                                  // Execution timestamp
+  bytes result = 3;                                      // Execution result
+  bytes state_hash = 4;                                  // State hash after execution
+  uint64 execution_time_ns = 5;                          // Execution time in nanoseconds
+  uint64 memory_used = 6;                                // Memory used during execution
+  uint64 syscall_count = 7;                              // Number of syscalls made
+  string executor_id = 8;                                // ID of the TEE that executed the operation
+  bool success = 9;                                      // Whether execution was successful
+  string error_message = 10;                             // Error message if execution failed
+}
+
+// BatchStatistics provides detailed statistics about batch execution
+message BatchStatistics {
+  uint64 mean_execution_time_ns = 1;                     // Mean execution time per operation
+  uint64 median_execution_time_ns = 2;                   // Median execution time per operation
+  uint64 p95_execution_time_ns = 3;                      // 95th percentile execution time
+  uint64 p99_execution_time_ns = 4;                      // 99th percentile execution time
+  uint64 max_execution_time_ns = 5;                      // Maximum execution time
+  uint64 min_execution_time_ns = 6;                      // Minimum execution time
+  uint64 stdev_execution_time_ns = 7;                    // Standard deviation of execution time
+  uint64 total_network_latency_ns = 8;                   // Total network latency
+  uint64 total_memory_used = 9;                          // Total memory used
+  uint32 dependency_wait_count = 10;                     // Number of operations that had to wait on dependencies
+}
+
+// BatchProxyExecutionRequest extends BatchDirectExecutionRequest with failover options
+message BatchProxyExecutionRequest {
+  string sender_id = 1;                                  // ID of the requesting TEE
+  repeated BatchOperation operations = 2;                // Batch of operations to execute
+  string region_id = 3;                                  // Region ID
+  map<string, bytes> shared_parameters = 4;              // Parameters shared across multiple operations
+  BatchOptions options = 5;                              // Batch execution options
+  
+  // Failover specific fields
+  string preferred_tee_type = 6;                         // Preferred TEE type (SGX, SEV)
+  int32 max_retries = 7;                                 // Maximum number of retries
+  repeated string excluded_peers = 8;                    // TEE IDs to exclude
+  bool cross_region_allowed = 9;                         // Whether cross-region execution is allowed
 }
