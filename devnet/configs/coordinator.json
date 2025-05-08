@@ -1,0 +1,19 @@
+{
+  "port": 9080,
+  "host": "127.0.0.1",
+  "region_id": "local-region-1",
+  "log_level": "debug",
+  "attestation_verification": "simulation",
+  "parameter_validation": {
+    "enabled": true,
+    "max_parameter_size": 1048576,
+    "support_length_prefix": true,
+    "support_direct_format": true,
+    "default_format": "length_prefix"
+  },
+  "performance": {
+    "batch_size": 100,
+    "thread_count": 8,
+    "metrics_enabled": true
+  }
+}

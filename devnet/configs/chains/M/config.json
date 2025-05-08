@@ -1,0 +1,22 @@
+{
+  "tee-integration": {
+    "enabled": true,
+    "coordinator-url": "http://127.0.0.1:9080",
+    "primary-worker": "sgx1",
+    "secondary-worker": "sev1",
+    "verification-level": "dual",
+    "supported-formats": ["length_prefix", "direct"],
+    "max-batch-size": 100,
+    "target-latency-ms": 100
+  },
+  "vm-config": {
+    "hypersdk-config": {
+      "log-level": "debug",
+      "tee-module-enabled": true
+    },
+    "state-sync-enabled": true,
+    "continuous-profiling-enabled": false,
+    "metrics-enabled": true,
+    "index-transactions": true
+  }
+}

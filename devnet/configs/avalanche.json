@@ -1,0 +1,18 @@
+{
+  "network-id": 1337,
+  "http-host": "127.0.0.1",
+  "http-port": 9650,
+  "public-ip": "127.0.0.1",
+  "staking-port": 9651,
+  "db-dir": "./db",
+  "log-level": "debug",
+  "chain-config-dir": "./configs/chains",
+  "tee-integration": {
+    "coordinator-url": "http://127.0.0.1:9080",
+    "primary-tee": "sgx1",
+    "secondary-tee": "sev1",
+    "verification-level": "dual",
+    "batch-size": 100,
+    "allowed-formats": ["length_prefix", "direct"]
+  }
+}

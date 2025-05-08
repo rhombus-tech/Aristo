@@ -1,0 +1,27 @@
+{
+  "tee_type": "sgx",
+  "tee_id": "sgx1",
+  "port": 8081,
+  "coordinator_url": "http://127.0.0.1:9080",
+  "log_level": "debug",
+  "region_id": "local-region-1",
+  "mesh_enabled": true,
+  "mesh_peers": ["http://127.0.0.1:8082", "http://127.0.0.1:8083", "http://127.0.0.1:8084"],
+  "attestation_type": "simulation",
+  "parameter_validation": {
+    "enabled": true,
+    "max_parameter_size": 1048576,
+    "support_length_prefix": true,
+    "support_direct_format": true
+  },
+  "performance": {
+    "batch_size": 100,
+    "thread_count": 8,
+    "metrics_enabled": true
+  },
+  "dual_execution": {
+    "enabled": true,
+    "cross_attestation": true,
+    "fallback_on_mismatch": true
+  }
+}
