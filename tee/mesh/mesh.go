@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// MeshService implements the TeeMesh service for direct TEE-to-TEE communication
-type MeshService struct {
+// TeeMeshService implements the TeeMesh service for direct TEE-to-TEE communication
+type TeeMeshService struct {
 	proto.UnimplementedTeeMeshServer // Embed for forward compatibility
 
 	// TEE information
@@ -249,8 +249,8 @@ type MeshConfig struct {
 	Handler    ExecutionHandler
 }
 
-// NewMeshService creates a new mesh service
-func NewMeshService(config *MeshConfig) (*MeshService, error) {
+// NewTeeMeshService creates a new mesh service
+func NewTeeMeshService(config *MeshConfig) (*TeeMeshService, error) {
 	if config.TEEID == "" {
 		return nil, errors.New("TEEID is required")
 	}
@@ -280,7 +280,7 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 	
 	stateManager := NewDefaultStateManager()
 	
-	service := &MeshService{
+	service := &TeeMeshService{
 		teeID:           config.TEEID,
 		teeType:         config.TEEType,
 		regionID:        config.RegionID,
@@ -301,7 +301,7 @@ func NewMeshService(config *MeshConfig) (*MeshService, error) {
 }
 
 // Start starts the mesh service
-func (m *MeshService) Start() error {
+func (m *TeeMeshService) Start() error {
 	// Create a listener
 	lis, err := net.Listen("tcp", m.endpoint)
 	if err != nil {
@@ -336,7 +336,7 @@ func (m *MeshService) Start() error {
 }
 
 // Stop stops the mesh service
-func (m *MeshService) Stop() {
+func (m *TeeMeshService) Stop() {
 	if m.server != nil {
 		m.server.GracefulStop()
 	}
@@ -353,7 +353,7 @@ func (m *MeshService) Stop() {
 }
 
 // Discover handles TEE discovery requests
-func (m *MeshService) Discover(ctx context.Context, req *proto.DiscoveryRequest) (*proto.DiscoveryResponse, error) {
+func (m *TeeMeshService) Discover(ctx context.Context, req *proto.DiscoveryRequest) (*proto.DiscoveryResponse, error) {
 	// Record the discovering peer
 	if req.TeeId != "" && req.Endpoint != "" {
 		// Create a new peer
@@ -406,7 +406,7 @@ func (m *MeshService) Discover(ctx context.Context, req *proto.DiscoveryRequest)
 }
 
 // DirectExecute handles direct execution requests
-func (m *MeshService) DirectExecute(ctx context.Context, req *proto.DirectExecutionRequest) (*proto.DirectExecutionResponse, error) {
+func (m *TeeMeshService) DirectExecute(ctx context.Context, req *proto.DirectExecutionRequest) (*proto.DirectExecutionResponse, error) {
 	if req == nil {
 		return nil, errors.New("cannot execute nil request")
 	}
@@ -482,7 +482,7 @@ func (m *MeshService) DirectExecute(ctx context.Context, req *proto.DirectExecut
 }
 
 // Ping handles ping requests
-func (m *MeshService) Ping(ctx context.Context, req *proto.PingRequest) (*proto.PingResponse, error) {
+func (m *TeeMeshService) Ping(ctx context.Context, req *proto.PingRequest) (*proto.PingResponse, error) {
 	// Record timestamp for accurate latency measurement
 	now := time.Now()
 	
@@ -505,7 +505,7 @@ func (m *MeshService) Ping(ctx context.Context, req *proto.PingRequest) (*proto.
 }
 
 // Sync handles state synchronization requests
-func (m *MeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.SyncResponse, error) {
+func (m *TeeMeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.SyncResponse, error) {
 	// 1. Check if we have the requested object
 	state, err := m.getStateForObject(req.ObjectId)
 	if err != nil {
@@ -569,7 +569,7 @@ func (m *MeshService) Sync(ctx context.Context, req *proto.SyncRequest) (*proto.
 }
 
 // handleReceivedSync processes a received sync response
-func (m *MeshService) handleReceivedSync(resp *proto.SyncResponse) error {
+func (m *TeeMeshService) handleReceivedSync(resp *proto.SyncResponse) error {
 	if resp == nil {
 		return errors.New("received nil sync response")
 	}
@@ -638,7 +638,7 @@ func (m *MeshService) handleReceivedSync(resp *proto.SyncResponse) error {
 }
 
 // shouldUseDelta determines if we should use delta updates based on state comparison
-func (m *MeshService) shouldUseDelta(prevState, currentState []byte, changeThreshold float64) bool {
+func (m *TeeMeshService) shouldUseDelta(prevState, currentState []byte, changeThreshold float64) bool {
 	// For very small states, the overhead of delta is not worth it
 	if len(prevState) < 1024 || len(currentState) < 1024 {
 		return false
@@ -695,7 +695,7 @@ func (e *DeltaUpdateError) Unwrap() error {
 
 // generateDeltaUpdates creates an efficient delta between current and previous state
 // Uses binary diffing for small payloads (reduced CPU cost)
-func (m *MeshService) generateDeltaUpdates(objectID string, previousState []byte) ([]byte, error) {
+func (m *TeeMeshService) generateDeltaUpdates(objectID string, previousState []byte) ([]byte, error) {
 	// Get current state for the object
 	currentState, err := m.getStateForObject(objectID)
 	if err != nil {
@@ -731,7 +731,7 @@ func (m *MeshService) generateDeltaUpdates(objectID string, previousState []byte
 }
 
 // applyDeltaUpdates applies a delta patch to a previous state to get the new state
-func (m *MeshService) applyDeltaUpdates(previousState []byte, deltaUpdates []byte) ([]byte, error) {
+func (m *TeeMeshService) applyDeltaUpdates(previousState []byte, deltaUpdates []byte) ([]byte, error) {
 	if len(previousState) == 0 {
 		return nil, &DeltaUpdateError{
 			Operation: "apply",
@@ -759,7 +759,7 @@ func (m *MeshService) applyDeltaUpdates(previousState []byte, deltaUpdates []byt
 
 // getStateForObject retrieves the current state for a given object ID
 // In a real implementation, this would access your state storage system
-func (m *MeshService) getStateForObject(objectID string) ([]byte, error) {
+func (m *TeeMeshService) getStateForObject(objectID string) ([]byte, error) {
 	// This is a placeholder - in a real implementation, you would:
 	// 1. Access your state storage (database, in-memory store, etc.)
 	// 2. Retrieve the current state for the specified object
@@ -775,7 +775,7 @@ func (m *MeshService) getStateForObject(objectID string) ([]byte, error) {
 }
 
 // updateObjectState updates the state for a specific object and updates lastStateHash
-func (m *MeshService) updateObjectState(objectID string, state []byte) {
+func (m *TeeMeshService) updateObjectState(objectID string, state []byte) {
 	if len(state) == 0 {
 		return
 	}
@@ -793,7 +793,7 @@ func (m *MeshService) updateObjectState(objectID string, state []byte) {
 }
 
 // ProxyExecute handles execution requests with automatic failover
-func (m *MeshService) ProxyExecute(ctx context.Context, req *proto.ProxyExecutionRequest) (*proto.DirectExecutionResponse, error) {
+func (m *TeeMeshService) ProxyExecute(ctx context.Context, req *proto.ProxyExecutionRequest) (*proto.DirectExecutionResponse, error) {
 	// 1. Try to execute locally if this TEE is the target
 	if req.IdTo == m.teeID {
 		// Convert ProxyExecutionRequest to DirectExecutionRequest
@@ -962,7 +962,7 @@ func (m *MeshService) ProxyExecute(ctx context.Context, req *proto.ProxyExecutio
 }
 
 // ConnectToPeer establishes a connection to a peer
-func (m *MeshService) ConnectToPeer(peerID, endpoint string) (*Peer, error) {
+func (m *TeeMeshService) ConnectToPeer(peerID, endpoint string) (*Peer, error) {
 	// Check if we already have an active connection to this peer
 	m.peerMutex.RLock()
 	existingPeer, exists := m.peers[peerID]
@@ -1005,7 +1005,7 @@ func (m *MeshService) ConnectToPeer(peerID, endpoint string) (*Peer, error) {
 }
 
 // addOrUpdatePeer adds or updates a peer
-func (m *MeshService) addOrUpdatePeer(peer *Peer) {
+func (m *TeeMeshService) addOrUpdatePeer(peer *Peer) {
 	m.peerMutex.Lock()
 	defer m.peerMutex.Unlock()
 	
@@ -1039,7 +1039,7 @@ func (m *MeshService) addOrUpdatePeer(peer *Peer) {
 }
 
 // GetPeer gets a peer by ID
-func (m *MeshService) GetPeer(peerID string) (*Peer, bool) {
+func (m *TeeMeshService) GetPeer(peerID string) (*Peer, bool) {
 	m.peerMutex.RLock()
 	defer m.peerMutex.RUnlock()
 	
@@ -1048,17 +1048,77 @@ func (m *MeshService) GetPeer(peerID string) (*Peer, bool) {
 }
 
 // GetTEEID returns the ID of this TEE in the mesh
-func (m *MeshService) GetTEEID() string {
+func (m *TeeMeshService) GetTEEID() string {
 	return m.teeID
 }
 
 // GetTEEType returns the TEE type for this service
-func (s *MeshService) GetTEEType() string {
-    return s.teeType
+func (m *TeeMeshService) GetTEEType() string {
+    return m.teeType
+}
+
+// GetSuitablePeers returns a list of peers matching the criteria
+func (m *TeeMeshService) GetSuitablePeers(regionID string, preferredTEEType string, excludedPeers []string) []*Peer {
+	m.peerMutex.RLock()
+	defer m.peerMutex.RUnlock()
+	
+	// Create a map of excluded peers for quick lookup
+	excluded := make(map[string]bool)
+	for _, peerID := range excludedPeers {
+		excluded[peerID] = true
+	}
+	
+	// Collect suitable peers
+	suitable := make([]*Peer, 0)
+	for _, peer := range m.peers {
+		// Skip excluded peers
+		if excluded[peer.TEEID] {
+			continue
+		}
+		
+		// Match region if specified
+		if regionID != "" && peer.RegionID != regionID {
+			continue
+		}
+		
+		// Check status (only include active peers)
+		if peer.Status != "active" {
+			continue
+		}
+		
+		// Add to suitable peers
+		suitable = append(suitable, peer)
+	}
+	
+	// Sort suitable peers by preference
+	sort.Slice(suitable, func(i, j int) bool {
+		// Preferred TEE type comes first if specified
+		if preferredTEEType != "" {
+			iPreferred := suitable[i].TEEType == preferredTEEType
+			jPreferred := suitable[j].TEEType == preferredTEEType
+			
+			if iPreferred != jPreferred {
+				return iPreferred
+			}
+		}
+		
+		// Sort by latency (lower is better)
+		return suitable[i].AverageLatencyNs < suitable[j].AverageLatencyNs
+	})
+	
+	return suitable
+}
+
+// GetBatchProcessorMetrics returns metrics from the batch processor
+func (m *TeeMeshService) GetBatchProcessorMetrics() *BatchProcessorMetrics {
+	if m.batchProcessor != nil {
+		return m.batchProcessor.GetMetrics()
+	}
+	return nil
 }
 
 // PerformPeriodicPings maintains accurate latency information with peers
-func (m *MeshService) PerformPeriodicPings(ctx context.Context) {
+func (m *TeeMeshService) PerformPeriodicPings(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	
@@ -1073,7 +1133,7 @@ func (m *MeshService) PerformPeriodicPings(ctx context.Context) {
 }
 
 // pingAllPeers pings all known peers to update latency information
-func (m *MeshService) pingAllPeers(ctx context.Context) {
+func (m *TeeMeshService) pingAllPeers(ctx context.Context) {
 	m.peerMutex.RLock()
 	peers := make([]*Peer, 0, len(m.peers))
 	for _, peer := range m.peers {
@@ -1198,7 +1258,7 @@ func abs(x int) int {
 }
 
 // SyncState synchronizes state for an object with another TEE
-func (m *MeshService) SyncState(ctx context.Context, teeID string, objectID string) error {
+func (m *TeeMeshService) SyncState(ctx context.Context, teeID string, objectID string) error {
 	// Check if the peer exists
 	peer, exists := m.GetPeer(teeID)
 	if !exists {
@@ -1298,7 +1358,7 @@ func (m *MeshService) SyncState(ctx context.Context, teeID string, objectID stri
 	return nil
 }
 
-func (m *MeshService) getPeer(teeID string) (*Peer, error) {
+func (m *TeeMeshService) getPeer(teeID string) (*Peer, error) {
 	m.peerMutex.RLock()
 	defer m.peerMutex.RUnlock()
 	
@@ -1311,7 +1371,7 @@ func (m *MeshService) getPeer(teeID string) (*Peer, error) {
 }
 
 // peerClient returns a mesh client for a given peer ID
-func (m *MeshService) peerClient(peerID string) proto.TeeMeshClient {
+func (m *TeeMeshService) peerClient(peerID string) proto.TeeMeshClient {
 	m.peerMutex.RLock()
 	defer m.peerMutex.RUnlock()
 	

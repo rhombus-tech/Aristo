@@ -18,7 +18,7 @@ import (
 
 // BatchProcessor handles batch operations for the mesh network
 type BatchProcessor struct {
-	meshService      *MeshService
+	meshService      *TeeMeshService
 	metrics          *BatchProcessorMetrics
 	sharedParameters map[string][]byte
 	mu               sync.RWMutex
@@ -48,7 +48,7 @@ type BatchProcessorMetrics struct {
 }
 
 // NewBatchProcessor creates a new batch processor
-func NewBatchProcessor(meshService *MeshService) *BatchProcessor {
+func NewBatchProcessor(meshService *TeeMeshService) *BatchProcessor {
 	return &BatchProcessor{
 		meshService:      meshService,
 		metrics:          &BatchProcessorMetrics{},
@@ -756,10 +756,29 @@ func (b *BatchProcessor) GetMetrics() *BatchProcessorMetrics {
 	b.metrics.mu.RLock()
 	defer b.metrics.mu.RUnlock()
 	
-	// Create a copy of the metrics
-	metricsCopy := *b.metrics
+	// Create a copy of the metrics without copying the mutex
+	metricsCopy := &BatchProcessorMetrics{
+		TotalBatchesProcessed:     b.metrics.TotalBatchesProcessed,
+		TotalBatchesSucceeded:     b.metrics.TotalBatchesSucceeded,
+		TotalBatchesFailed:        b.metrics.TotalBatchesFailed,
+		TotalOperationsProcessed:  b.metrics.TotalOperationsProcessed,
+		TotalOperationsSucceeded:  b.metrics.TotalOperationsSucceeded,
+		TotalOperationsFailed:     b.metrics.TotalOperationsFailed,
+		TotalExecutionTimeNs:      b.metrics.TotalExecutionTimeNs,
+		TotalOverheadTimeNs:       b.metrics.TotalOverheadTimeNs,
+		AverageOperationsPerBatch: b.metrics.AverageOperationsPerBatch,
+		AverageBatchLatencyNs:     b.metrics.AverageBatchLatencyNs,
+		MaxBatchLatencyNs:         b.metrics.MaxBatchLatencyNs,
+		CompressionRatioSum:       b.metrics.CompressionRatioSum,
+		CompressionRatioCount:     b.metrics.CompressionRatioCount,
+		AverageCompressionRatio:   b.metrics.AverageCompressionRatio,
+		MaxConcurrentBatches:      b.metrics.MaxConcurrentBatches,
+		CurrentConcurrentBatches:  b.metrics.CurrentConcurrentBatches,
+		DependencyWaitCountTotal:  b.metrics.DependencyWaitCountTotal,
+		OperationsFallbackTotal:   b.metrics.OperationsFallbackTotal,
+	}
 	
-	return &metricsCopy
+	return metricsCopy
 }
 
 // buildDependencyGraph builds a dependency graph from batch operations

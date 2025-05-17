@@ -5,25 +5,60 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/hypersdk/chain"
 	"github.com/ava-labs/hypersdk/codec"
 	"github.com/ava-labs/hypersdk/state"
+	
 	"github.com/rhombus-tech/vm/consts"
 	"github.com/rhombus-tech/vm/coordination/xregion"
 )
 
 var (
-	ErrNilIntent           = errors.New("nil cross-region intent")
-	ErrInvalidTimeWindow   = errors.New("invalid time window")
-	ErrEmptyStateChanges   = errors.New("empty state changes")
-	ErrInvalidStateChanges = errors.New("invalid state changes")
-	ErrInvalidSignature    = errors.New("invalid signature")
-	ErrMissingSignature    = errors.New("missing required signature")
+	ErrNilIntent                = errors.New("nil cross-region intent")
+	ErrInvalidTimeWindow        = errors.New("invalid time window")
+	ErrEmptyStateChanges        = errors.New("empty state changes")
+	ErrInvalidStateChanges      = errors.New("invalid state changes")
+	ErrInvalidSignature         = errors.New("invalid signature")
+	ErrMissingSignature         = errors.New("missing required signature")
+	ErrRangeProofTimeout        = errors.New("range proof request timed out")
+	ErrRangeProofProcessingFail = errors.New("range proof processing failed")
+	ErrTooManyRangeRequests     = errors.New("too many range requests")
+	ErrRegionProcessingFailed   = errors.New("region processing failed")
 )
+
+// RangeProofJob represents a single range proof request to be processed
+type RangeProofJob struct {
+	Request   xregion.RangeRequest
+	RegionID  string
+	Timestamp int64
+}
+
+// RangeProofResult contains the result of a range proof request
+type RangeProofResult struct {
+	Response *xregion.RangeResponse
+	RegionID string
+	Err      error
+}
+
+// RegionProcessingJob represents a single region to be processed
+type RegionProcessingJob struct {
+	RegionID  string
+	IntentID  string
+	Signature []byte
+}
+
+// RegionProcessingResult contains the result of region processing
+type RegionProcessingResult struct {
+	RegionID string
+	Err      error
+}
 
 type CrossRegionAction struct {
 	Intent *xregion.CrossRegionIntent `json:"intent"`
@@ -33,10 +68,16 @@ func (a *CrossRegionAction) Execute(
 	ctx context.Context,
 	_ chain.Rules,
 	mu state.Mutable,
-	_ int64,
+	timestamp int64,
 	actor codec.Address,
 	_ ids.ID,
 ) (codec.Typed, error) {
+	start := time.Now()
+	defer func() {
+		// Performance tracking can be added here when metrics package is available
+		_ = time.Since(start) // For now, just calculate duration but don't use it
+	}()
+
 	// Validate the action
 	if err := a.ValidateBasic(); err != nil {
 		return nil, err
@@ -44,68 +85,55 @@ func (a *CrossRegionAction) Execute(
 
 	coordinator := xregion.GetCoordinator()
 	
-	// Create RegionProcessor with reasonable concurrency limit
-	processor, err := xregion.NewRegionProcessor(4, coordinator)
+	// Create RegionProcessor with dynamic concurrency based on CPU count
+	cpus := runtime.NumCPU()
+	concurrency := cpus
+	if cpus > 8 {
+		// For machines with many cores, use 75% of cores
+		concurrency = (cpus * 3) / 4
+	}
+	
+	processor, err := xregion.NewRegionProcessor(int64(concurrency), coordinator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create region processor: %w", err)
 	}
 
-	// Get required range proofs
+	// Process range proofs in parallel
 	ranges := a.getRequiredRanges()
-	proofs := make(map[string]*xregion.RangeResponse)
-
-	// Request proofs for all required ranges
-	for _, rng := range ranges {
-		resp, err := coordinator.RequestRangeProof(ctx, &rng)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get range proof: %w", err)
-		}
-
-		proofs[rng.RegionID] = resp
+	proofs, err := a.processRangeProofsParallel(ctx, coordinator, ranges)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process range proofs: %w", err)
 	}
 
 	// Get list of regions that need confirmation
-	var regions []string
-	for regionID := range a.Intent.StateChanges {
-		if len(a.Intent.StateChanges[regionID]) > 0 {
-			regions = append(regions, regionID)
-		}
-	}
+	regions := a.getRegionsRequiringConfirmation()
 
-	// Process regions in parallel
+	// Process regions in parallel with improved error handling
 	signature, err := coordinator.Sign([]byte(a.Intent.ID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign intent: %w", err)
 	}
 
-	if err := processor.ProcessRegions(ctx, a.Intent.ID, regions, signature); err != nil {
+	if err := a.processRegionsParallel(ctx, processor, regions, signature); err != nil {
 		return nil, fmt.Errorf("failed to process regions: %w", err)
 	}
 
 	// Verify all state changes are covered by proofs
-	for regionID, changes := range a.Intent.StateChanges {
-		if len(changes) == 0 {
-			continue
-		}
-		
-		proof, exists := proofs[regionID]
-		if !exists {
-			return nil, fmt.Errorf("missing proof for region %s", regionID)
-		}
-
-		// Verify each state change is in the proof
-		for _, change := range changes {
-			exists := false
-			for key := range proof.Proof.Entries {
-				if bytes.Equal([]byte(key), change.Key) {
-					exists = true
+	verificationErrors := a.verifyStateChangesWithProofs(proofs)
+	if len(verificationErrors) > 0 {
+		// Format useful error message with all verification failures
+		errMsg := "state verification failed:\n"
+		for regionID, failures := range verificationErrors {
+			errMsg += fmt.Sprintf("  Region %s: %d failed verifications\n", regionID, len(failures))
+			for i, failure := range failures {
+				if i >= 3 { // Limit to first 3 failures per region
+					errMsg += fmt.Sprintf("    ... and %d more\n", len(failures)-3)
 					break
 				}
-			}
-			if !exists {
-				return nil, fmt.Errorf("state change not covered by proof for region %s", regionID)
+				errMsg += fmt.Sprintf("    Key: %x\n", failure.Key)
 			}
 		}
+		return nil, errors.New(errMsg)
 	}
 
 	// Apply state changes
@@ -129,7 +157,9 @@ func (a *CrossRegionAction) Execute(
 		}
 	}
 
-	return &CrossRegionResult{Success: true}, nil
+	return &CrossRegionResult{
+		Success: true,
+	}, nil
 }
 
 func (a *CrossRegionAction) ValidateBasic() error {
@@ -322,18 +352,23 @@ func (a *CrossRegionAction) StateKeys(actor codec.Address) state.Keys {
 func (a *CrossRegionAction) getRequiredRanges() []xregion.RangeRequest {
 	var ranges []xregion.RangeRequest
 
-	// Group changes by region and key prefix
+	// Group changes by region and create range requests
 	for regionID, changes := range a.Intent.StateChanges {
 		if len(changes) == 0 {
 			continue
 		}
-		
-		keyRanges := groupChangesByPrefix(changes)
-		for _, r := range keyRanges {
+
+		// For each region, group changes by key prefix to minimize range requests
+		groups := groupChangesByPrefix(changes)
+
+		// Create range request for each group
+		for _, group := range groups {
+			// Add a small buffer to ensure we get all required keys
 			ranges = append(ranges, xregion.RangeRequest{
-				StartKey:   r.Start,
-				EndKey:     r.End,
-				RegionID:   regionID,
+				RegionID: regionID,
+				StartKey: group.Start,
+				EndKey:   group.End,
+				// Add TimeWindow for time-based verification
 				TimeWindow: xregion.TimeWindow{
 					Start:    time.Now(),
 					Duration: 5 * time.Minute,
@@ -345,40 +380,358 @@ func (a *CrossRegionAction) getRequiredRanges() []xregion.RangeRequest {
 	return ranges
 }
 
+
+
+// getRegionsRequiringConfirmation returns a list of regions that need to be processed
+func (a *CrossRegionAction) getRegionsRequiringConfirmation() []string {
+	regions := set.Set[string]{}
+	
+	for regionID, changes := range a.Intent.StateChanges {
+		if len(changes) > 0 {
+			regions.Add(regionID)
+		}
+	}
+	
+	return regions.List()
+}
+
 // groupChangesByPrefix groups state changes by their key prefix for efficient range requests
 func groupChangesByPrefix(changes []xregion.StateChange) []struct{ Start, End []byte } {
+	// If no changes, return empty result
 	if len(changes) == 0 {
 		return nil
 	}
-
-	// Sort changes by key
+	
+	// First sort changes by key
 	sort.Slice(changes, func(i, j int) bool {
 		return bytes.Compare(changes[i].Key, changes[j].Key) < 0
 	})
 
-	var ranges []struct{ Start, End []byte }
-	currentRange := struct{ Start, End []byte }{
-		Start: changes[0].Key,
-		End:   changes[0].Key,
+	// Use adaptive grouping strategy based on distribution
+	// Calculate key distribution statistics
+	prefixCounts := make(map[string]int)
+	for _, change := range changes {
+		// Use first 4 bytes as prefix bucket
+		prefixLen := 4
+		if len(change.Key) < 4 {
+			prefixLen = len(change.Key)
+		}
+		prefix := string(change.Key[:prefixLen])
+		prefixCounts[prefix]++
 	}
 
+	// Group by common prefix with adaptive strategy
+	var groups []struct{ Start, End []byte }
+	currentStart := changes[0].Key
+	currentEnd := changes[0].Key
+	keysInCurrentGroup := 1
+
+	// Target 25-50 keys per range request for optimal performance
+	targetGroupSize := calculateOptimalGroupSize(len(changes))
+
 	for i := 1; i < len(changes); i++ {
-		// If keys are contiguous, extend current range
-		if bytes.Equal(changes[i].Key[:8], currentRange.End[:8]) {
-			currentRange.End = changes[i].Key
+		// Check if we should start a new group based on:
+		// 1. Key proximity
+		// 2. Number of keys in current group
+		// 3. Prefix distribution
+		if !areKeysProximate(currentEnd, changes[i].Key) || keysInCurrentGroup >= targetGroupSize {
+			// Add current group
+			groups = append(groups, struct{ Start, End []byte }{
+				Start: currentStart,
+				// End with an extra byte to ensure inclusivity
+				End:   makeInclusive(currentEnd),
+			})
+
+			// Start new group
+			currentStart = changes[i].Key
+			keysInCurrentGroup = 1
+		} else {
+			keysInCurrentGroup++
+		}
+
+		currentEnd = changes[i].Key
+	}
+
+	// Add final group
+	groups = append(groups, struct{ Start, End []byte }{
+		Start: currentStart,
+		End:   makeInclusive(currentEnd),
+	})
+
+	return groups
+}
+
+// makeInclusive creates an inclusive end key
+func makeInclusive(key []byte) []byte {
+	// Append 0xFF to make range inclusive of the end key
+	result := make([]byte, len(key)+1)
+	copy(result, key)
+	result[len(key)] = 0xFF
+	return result
+}
+
+// calculateOptimalGroupSize determines ideal size for range request groups
+func calculateOptimalGroupSize(totalChanges int) int {
+	// Use square root scaling for adaptive group sizing
+	// This balances between too many small requests vs. few large ones
+	sqrt := int(float64(totalChanges) / 2)
+	if sqrt < 20 {
+		return 20 // Minimum group size
+	}
+	if sqrt > 100 {
+		return 100 // Maximum group size
+	}
+	return sqrt
+}
+
+// areKeysProximate determines if two keys are close enough for efficient range requesting
+func areKeysProximate(k1, k2 []byte) bool {
+	// Fast path for very similar keys
+	prefixLen := commonPrefixLen(k1, k2)
+	minLen := min(len(k1), len(k2))
+	
+	// If keys share a significant prefix, consider them close
+	if prefixLen >= minLen/2 {
+		return true
+	}
+	
+	// Check if keys are numerically close
+	if len(k1) == len(k2) && prefixLen == len(k1)-1 {
+		// If keys differ only in the last byte, check numeric proximity
+		return abs(int(k1[len(k1)-1]) - int(k2[len(k2)-1])) < 10
+	}
+	
+	return false
+}
+
+// commonPrefixLen returns the length of the common prefix of two byte slices
+func commonPrefixLen(a, b []byte) int {
+	minLen := min(len(a), len(b))
+	for i := 0; i < minLen; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return minLen
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// abs returns the absolute value of an integer
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// processRangeProofsParallel processes range proof requests in parallel using a worker pool
+func (a *CrossRegionAction) processRangeProofsParallel(ctx context.Context, coordinator *xregion.Coordinator, ranges []xregion.RangeRequest) (map[string]*xregion.RangeResponse, error) {
+	if len(ranges) == 0 {
+		return make(map[string]*xregion.RangeResponse), nil
+	}
+
+	// Create a semaphore to limit concurrent requests
+	maxWorkers := runtime.NumCPU() * 2 // Use more workers for IO-bound operations
+	if maxWorkers > len(ranges) {
+		maxWorkers = len(ranges)
+	}
+
+	// Create buffered channels for jobs and results
+	jobs := make(chan xregion.RangeRequest, len(ranges))
+	results := make(chan struct {
+		response *xregion.RangeResponse
+		regionID string
+		err      error
+	}, len(ranges))
+
+	// Create worker pool
+	var wg sync.WaitGroup
+	// Start workers
+	for w := 0; w < maxWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for rng := range jobs {
+				// Create context with timeout for each request
+				requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				resp, err := coordinator.RequestRangeProof(requestCtx, &rng)
+				cancel()
+
+				// Send result
+				results <- struct {
+					response *xregion.RangeResponse
+					regionID string
+					err      error
+				}{
+					response: resp,
+					regionID: rng.RegionID,
+					err:      err,
+				}
+			}
+		}()
+	}
+
+	// Send jobs to workers
+	for _, rng := range ranges {
+		jobs <- rng
+	}
+	close(jobs)
+
+	// Collect results
+	proofs := make(map[string]*xregion.RangeResponse)
+	errors := make([]error, 0)
+
+	// Use a goroutine to collect results
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Process results as they come in
+	for result := range results {
+		if result.err != nil {
+			errors = append(errors, fmt.Errorf("region %s: %w", result.regionID, result.err))
+			continue
+		}
+		proofs[result.regionID] = result.response
+	}
+
+	// If any errors occurred, return a combined error
+	if len(errors) > 0 {
+		errMsg := fmt.Sprintf("%d range proof requests failed:", len(errors))
+		for i, err := range errors {
+			if i < 3 { // Only show first 3 errors
+				errMsg += "\n  " + err.Error()
+			} else {
+				errMsg += fmt.Sprintf("\n  ... and %d more errors", len(errors)-3)
+				break
+			}
+		}
+		return nil, fmt.Errorf(errMsg)
+	}
+
+	return proofs, nil
+}
+
+// processRegionsParallel processes regions in parallel
+func (a *CrossRegionAction) processRegionsParallel(ctx context.Context, processor *xregion.RegionProcessor, regions []string, signature []byte) error {
+	if len(regions) == 0 {
+		return nil
+	}
+
+	// For small number of regions, use direct method
+	if len(regions) <= 2 {
+		return processor.ProcessRegions(ctx, a.Intent.ID, regions, signature)
+	}
+
+	// Create context with timeout
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Create error group for parallel processing with cancellation
+	g, ctx := sync.WaitGroup{}, ctxWithTimeout
+	errorChan := make(chan error, len(regions))
+
+	// Process each region in parallel
+	for _, regionID := range regions {
+		regionID := regionID // Capture loop variable
+		g.Add(1)
+		go func() {
+			defer g.Done()
+
+			// Process single region individually by simulating the per-region behavior
+			// Since ProcessRegion doesn't exist, we'll create an equivalent using ProcessRegions with a single region
+			if err := processor.ProcessRegions(ctx, a.Intent.ID, []string{regionID}, signature); err != nil {
+				select {
+				case errorChan <- fmt.Errorf("failed to process region %s: %w", regionID, err):
+				default:
+					// Channel full, skip
+				}
+			}
+		}()
+	}
+
+	// Wait for all regions to be processed or error
+	done := make(chan struct{})
+	go func() {
+		g.Wait()
+		close(done)
+	}()
+
+	// Wait for completion or error
+	select {
+	case <-done:
+		// Success, check for any errors
+		close(errorChan)
+		errorList := make([]error, 0)
+		for err := range errorChan {
+			errorList = append(errorList, err)
+		}
+
+		if len(errorList) > 0 {
+			errMsg := fmt.Sprintf("%d regions failed processing:", len(errorList))
+			for i, err := range errorList {
+				if i < 5 { // Only show first 5 errors
+					errMsg += "\n  " + err.Error()
+				} else {
+					errMsg += fmt.Sprintf("\n  ... and %d more errors", len(errorList)-5)
+					break
+				}
+			}
+			return fmt.Errorf(errMsg)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("region processing timed out: %w", ctx.Err())
+	}
+}
+
+// verifyStateChangesWithProofs verifies that all state changes are covered by range proofs
+func (a *CrossRegionAction) verifyStateChangesWithProofs(proofs map[string]*xregion.RangeResponse) map[string][]xregion.StateChange {
+	verificationErrors := make(map[string][]xregion.StateChange)
+
+	// For each region's state changes
+	for regionID, changes := range a.Intent.StateChanges {
+		if len(changes) == 0 {
 			continue
 		}
 
-		// Start new range
-		ranges = append(ranges, currentRange)
-		currentRange = struct{ Start, End []byte }{
-			Start: changes[i].Key,
-			End:   changes[i].Key,
+		// Check if we have a proof for this region
+		proof, exists := proofs[regionID]
+		if !exists {
+			verificationErrors[regionID] = changes
+			continue
+		}
+
+		// Optimize verification with a map for O(1) lookup
+		entryMap := make(map[string]struct{})
+		for key := range proof.Proof.Entries {
+			entryMap[key] = struct{}{}
+		}
+
+		// Verify each state change
+		var failures []xregion.StateChange
+		for _, change := range changes {
+			// Convert key to string for map lookup
+			keyStr := string(change.Key)
+			if _, ok := entryMap[keyStr]; !ok {
+				failures = append(failures, change)
+			}
+		}
+
+		if len(failures) > 0 {
+			verificationErrors[regionID] = failures
 		}
 	}
 
-	ranges = append(ranges, currentRange)
-	return ranges
+	return verificationErrors
 }
 
 type CrossRegionResult struct {

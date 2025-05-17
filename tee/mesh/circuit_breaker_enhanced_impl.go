@@ -567,21 +567,45 @@ func alertLevelToString(level AlertLevel) string {
 
 // startHealthChecks starts periodic health checks
 func (ecb *EnhancedCircuitBreaker) startHealthChecks() {
+	if ecb == nil || ecb.config == nil || ecb.config.HealthCheckInterval <= 0 {
+		return
+	}
+	
 	healthCtx, cancel := context.WithCancel(context.Background())
 	ecb.healthCheckCancelFunc = cancel
 	
 	ecb.healthCheckTicker = time.NewTicker(ecb.config.HealthCheckInterval)
 	
 	go func() {
+		// Make a local copy of the ticker to avoid nil reference if ecb is modified
+		ticker := ecb.healthCheckTicker
+		if ticker == nil {
+			return
+		}
+		
 		for {
 			select {
 			case <-healthCtx.Done():
-				if ecb.healthCheckTicker != nil {
-					ecb.healthCheckTicker.Stop()
+				if ticker != nil {
+					ticker.Stop()
 				}
 				return
-			case <-ecb.healthCheckTicker.C:
-				ecb.performHealthCheck(healthCtx)
+			case <-ticker.C:
+				// Skip health check if context is done
+				select {
+				case <-healthCtx.Done():
+					return
+				default:
+					// Safe to proceed
+				}
+				
+				// Use a mutex or other synchronization if needed
+				if ecb != nil {
+					ecb.performHealthCheck(healthCtx)
+				} else {
+					// Circuit breaker was garbage collected or is nil
+					return
+				}
 			}
 		}
 	}()

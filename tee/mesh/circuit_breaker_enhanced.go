@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -294,7 +295,7 @@ func containsAny(s string, substrs []string) bool {
 	return false
 }
 
-// contains is a simple string contains implementation
+// contains checks if a string contains a substring (case-insensitive)
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && s[0:len(s)][0:len(substr)] == substr
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
