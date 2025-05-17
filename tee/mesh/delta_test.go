@@ -13,7 +13,7 @@ import (
 func TestDeltaUpdates(t *testing.T) {
 	// Create a mesh service for testing
 	stateManager := NewDefaultStateManager()
-	service := &MeshService{
+	service := &TeeMeshService{
 		stateManager:    stateManager,
 		stateCache:      make(map[string]stateInfo),
 	}

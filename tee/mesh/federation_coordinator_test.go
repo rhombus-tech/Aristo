@@ -178,6 +178,11 @@ func TestFederatedSnapshot(t *testing.T) {
 	coordinator.AddRegion("region-2", "localhost:5002", false)
 	coordinator.AddRegion("region-3", "localhost:5003", false)
 	
+	// Register minimum required TEEs (3) for snapshot creation
+	snapshotCoordinator.RegisterTEE("tee-1", "SGX")
+	snapshotCoordinator.RegisterTEE("tee-2", "SEV")
+	snapshotCoordinator.RegisterTEE("tee-3", "SGX")
+	
 	// Create a federated snapshot
 	ctx := context.Background()
 	snapshot, err := coordinator.CreateFederatedSnapshot(ctx, []string{"region-1", "region-2", "region-3"})

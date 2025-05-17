@@ -120,15 +120,15 @@ func TestProxyExecuteWithFailover(t *testing.T) {
 
 // Mock discovery service for testing
 type MockDiscoveryService struct {
-	peers []*PeerInfo
+	peers []*PeerInfoV2
 }
 
-func (m *MockDiscoveryService) GetPeers() []*PeerInfo {
+func (m *MockDiscoveryService) GetPeers() []*PeerInfoV2 {
 	return m.peers
 }
 
-func (m *MockDiscoveryService) GetPeersByType(teeType string) []*PeerInfo {
-	var filtered []*PeerInfo
+func (m *MockDiscoveryService) GetPeersByType(teeType string) []*PeerInfoV2 {
+	var filtered []*PeerInfoV2
 	for _, p := range m.peers {
 		if p.TEEType == teeType {
 			filtered = append(filtered, p)
@@ -137,7 +137,7 @@ func (m *MockDiscoveryService) GetPeersByType(teeType string) []*PeerInfo {
 	return filtered
 }
 
-func (m *MockDiscoveryService) GetPeerByID(id string) *PeerInfo {
+func (m *MockDiscoveryService) GetPeerByID(id string) *PeerInfoV2 {
 	for _, p := range m.peers {
 		if p.TEEID == id {
 			return p

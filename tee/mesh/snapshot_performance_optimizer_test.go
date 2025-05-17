@@ -227,10 +227,11 @@ func TestSnapshotPerformanceOptimizer(t *testing.T) {
 		cacheMutex:           sync.RWMutex{},
 		snapshotCircuitBreaker: circuitBreaker,
 		diffUpdater: &DifferentialUpdater{
-			compressor: compressor,
-			diffCache:  make(map[string]*DifferentialUpdate),
-			cacheMutex: sync.RWMutex{},
-			metrics:    DiffMetrics{}, // Use the actual DiffMetrics struct
+			compressor:  compressor,
+			diffCache:   make(map[string]*DifferentialUpdate),
+			cacheMutex:  sync.RWMutex{},
+			metrics:     DiffMetrics{},
+			maxDiffSize: 10 * 1024 * 1024, // 10MB default max diff size
 		},
 		running:    true,
 	}

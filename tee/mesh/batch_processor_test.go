@@ -66,14 +66,14 @@ func (m *BatchMockExecutionHandler) Execute(ctx context.Context, req *proto.Dire
 }
 
 // Setup a test mesh service with the mock execution handler
-func setupTestMeshService() (*MeshService, *BatchMockExecutionHandler) {
+func setupTestMeshService() (*TeeMeshService, *BatchMockExecutionHandler) {
 	mockHandler := &BatchMockExecutionHandler{
 		execTime:    10 * time.Millisecond,
 		memoryUsed:  1024,
 		failureRate: 0,
 	}
 
-	service := &MeshService{
+	service := &TeeMeshService{
 		teeID:            "test-tee",
 		teeType:          "SGX",
 		regionID:         "test-region",
@@ -310,8 +310,7 @@ func TestBatchDirectExecute_LargeBatch(t *testing.T) {
 	assert.Less(t, execTime, 100*time.Millisecond)
 	
 	// Check the batch processor metrics
-	metrics, err := service.GetBatchProcessorMetrics()
-	assert.NoError(t, err)
+	metrics := service.GetBatchProcessorMetrics()
 	assert.NotNil(t, metrics)
 	assert.Equal(t, int64(1), metrics.TotalBatchesProcessed)
 	assert.Equal(t, int64(1), metrics.TotalBatchesSucceeded)

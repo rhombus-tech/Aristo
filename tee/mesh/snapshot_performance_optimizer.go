@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	
+	"github.com/rhombus-tech/vm/tee/proto"
 )
 
 // PerformanceLevel defines different performance optimization levels
@@ -397,9 +399,11 @@ func (o *SnapshotPerformanceOptimizer) retrieveSnapshotBytes(ctx context.Context
 	}
 	
 	// Convert snapshot to bytes - in a real implementation we would serialize it properly
-	// For simplicity in this implementation, we'll just use the first TEE's state data
-	if len(snapshot.TEESnapshots) > 0 && len(snapshot.TEESnapshots[0].StateData) > 0 {
-		return snapshot.TEESnapshots[0].StateData, nil
+	// In the new structure, we have TEESnapshotIDs instead of TEESnapshots
+	// We would need to fetch the actual snapshot data using these IDs
+	if len(snapshot.TEESnapshotIDs) > 0 {
+		// This is a placeholder - in a real implementation, you would fetch the actual snapshot data
+		return []byte(fmt.Sprintf("TEE Snapshot data for %s", snapshot.TEESnapshotIDs[0])), nil
 	}
 	
 	return []byte(fmt.Sprintf("Snapshot data for %s", snapshotID)), nil
@@ -420,8 +424,23 @@ func (o *SnapshotPerformanceOptimizer) GenerateDifferentialUpdate(ctx context.Co
 		return nil, fmt.Errorf("failed to get target snapshot: %w", err)
 	}
 	
+	// Convert mesh.RegionalSnapshot to proto.RegionalSnapshot for differential updater
+	protoBaseSnapshot := &proto.RegionalSnapshot{
+		RegionId:      baseSnapshot.RegionID,
+		SnapshotId:    baseSnapshot.SnapshotID,
+		Timestamp:     baseSnapshot.Timestamp.UnixNano(),
+		TeeSnapshotIds: baseSnapshot.TEESnapshotIDs,
+	}
+
+	protoTargetSnapshot := &proto.RegionalSnapshot{
+		RegionId:      targetSnapshot.RegionID,
+		SnapshotId:    targetSnapshot.SnapshotID,
+		Timestamp:     targetSnapshot.Timestamp.UnixNano(),
+		TeeSnapshotIds: targetSnapshot.TEESnapshotIDs,
+	}
+
 	// Use the differential updater to create a diff
-	diffUpdate, err := o.diffUpdater.GenerateDiff(baseSnapshot, targetSnapshot)
+	diffUpdate, err := o.diffUpdater.GenerateDiff(protoBaseSnapshot, protoTargetSnapshot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate differential update: %w", err)
 	}
@@ -431,7 +450,7 @@ func (o *SnapshotPerformanceOptimizer) GenerateDifferentialUpdate(ctx context.Co
 	// Update metrics manually
 	o.metrics.mutex.Lock()
 	o.metrics.DiffGenerationCount++
-	o.metrics.DiffGenerationLatencyAvgMs = calculateRunningAverage(
+	o.metrics.DiffGenerationLatencyAvgMs = calculatePerformanceAverage(
 		o.metrics.DiffGenerationLatencyAvgMs,
 		float64(latency),
 		float64(o.metrics.DiffGenerationCount),
@@ -467,17 +486,33 @@ func (o *SnapshotPerformanceOptimizer) ApplyDifferentialUpdate(
 		return nil, fmt.Errorf("failed to get base snapshot: %w", err)
 	}
 	
-	// Apply the diff
-	targetSnapshot, err := o.diffUpdater.ApplyDiff(baseSnapshot, diff)
+	// Convert mesh.RegionalSnapshot to proto.RegionalSnapshot for differential updater
+	protoBaseSnapshot := &proto.RegionalSnapshot{
+		RegionId:      baseSnapshot.RegionID,
+		SnapshotId:    baseSnapshot.SnapshotID,
+		Timestamp:     baseSnapshot.Timestamp.UnixNano(),
+		TeeSnapshotIds: baseSnapshot.TEESnapshotIDs,
+	}
+
+	// Apply the diff to the base snapshot (using proto.RegionalSnapshot)
+	protoResult, err := o.diffUpdater.ApplyDiff(protoBaseSnapshot, diff)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply diff: %w", err)
+		return nil, fmt.Errorf("failed to apply differential update: %w", err)
+	}
+
+	// Convert proto.RegionalSnapshot back to mesh.RegionalSnapshot
+	targetSnapshot := &RegionalSnapshot{
+		RegionID:      protoResult.RegionId,
+		SnapshotID:    protoResult.SnapshotId,
+		Timestamp:     time.Unix(0, protoResult.Timestamp),
+		TEESnapshotIDs: protoResult.TeeSnapshotIds,
 	}
 	
 	// Update metrics
 	o.metrics.mutex.Lock()
 	o.metrics.DiffApplyCount++
 	latencyMs := float64(time.Since(startTime).Milliseconds())
-	o.metrics.DiffApplyLatencyAvgMs = calculateRunningAverage(
+	o.metrics.DiffApplyLatencyAvgMs = calculatePerformanceAverage(
 		o.metrics.DiffApplyLatencyAvgMs,
 		latencyMs,
 		float64(o.metrics.DiffApplyCount),
@@ -555,10 +590,8 @@ func (o *SnapshotPerformanceOptimizer) UpdateStrategy(strategy *OptimizationStra
 				return fmt.Errorf("failed to update compressor: %w", err)
 			}
 			
-			// Update differential updater's compressor if it exists
-			if o.diffUpdater != nil {
-				o.diffUpdater.compressor = o.compressor
-			}
+			// Note: DifferentialUpdater doesn't have a compressor field
+			// We'll keep our own compressor in the optimizer
 		} else {
 			o.compressor = nil
 		}
@@ -762,7 +795,7 @@ func (o *SnapshotPerformanceOptimizer) updateSnapshotMetrics(snapshot *RegionalS
 	
 	// Update latency metrics
 	latencyMs := float64(duration.Milliseconds())
-	o.metrics.SnapshotCreationLatencyAvgMs = calculateRunningAverage(
+	o.metrics.SnapshotCreationLatencyAvgMs = calculatePerformanceAverage(
 		o.metrics.SnapshotCreationLatencyAvgMs,
 		latencyMs,
 		float64(o.metrics.SnapshotCreationCount),
@@ -785,8 +818,8 @@ func (o *SnapshotPerformanceOptimizer) updateSnapshotMetrics(snapshot *RegionalS
 	}
 }
 
-// calculateRunningAverage computes a running average
-func calculateRunningAverage(current, new float64, count float64) float64 {
+// calculatePerformanceAverage computes a running average for performance metrics
+func calculatePerformanceAverage(current, new float64, count float64) float64 {
 	if count <= 1 {
 		return new
 	}

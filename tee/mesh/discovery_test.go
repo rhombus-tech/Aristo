@@ -41,7 +41,7 @@ func TestDiscoveryService(t *testing.T) {
 	}
 	
 	// Test registering a peer
-	peerInfo := &PeerInfo{
+	peerInfo := &PeerInfoV2{
 		TEEID:    "peer1",
 		TEEType:  "SEV",
 		RegionID: "test-region",
@@ -62,7 +62,7 @@ func TestDiscoveryService(t *testing.T) {
 	peer1.Status = "active"
 	
 	// Register a new SGX peer directly
-	sgxPeer := &PeerInfo{
+	sgxPeer := &PeerInfoV2{
 		TEEID:    "peer2-sgx",
 		TEEType:  "SGX",
 		RegionID: "test-region",

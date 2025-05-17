@@ -58,8 +58,8 @@ func DefaultDiscoveryConfig() *DiscoveryConfig {
 	}
 }
 
-// PeerInfo stores information about a peer TEE
-type PeerInfo struct {
+// PeerInfoV2 stores enhanced information about a peer TEE
+type PeerInfoV2 struct {
 	// TEEID is the ID of the peer
 	TEEID string
 	
@@ -97,7 +97,7 @@ type DiscoveryService struct {
 	config *DiscoveryConfig
 	
 	// peers is a map of peer ID to peer information
-	peers map[string]*PeerInfo
+	peers map[string]*PeerInfoV2
 	
 	// accClient is the client for the accumulator
 	accClient *accumulator.Client
@@ -167,7 +167,7 @@ func NewDiscoveryService(config *DiscoveryConfig) (*DiscoveryService, error) {
 	
 	return &DiscoveryService{
 		config:       config,
-		peers:        make(map[string]*PeerInfo),
+		peers:        make(map[string]*PeerInfoV2),
 		accClient:    accClient,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -250,7 +250,7 @@ func (d *DiscoveryService) refreshLoop() {
 // sendHeartbeats sends heartbeats to all peers
 func (d *DiscoveryService) sendHeartbeats() {
 	d.mutex.RLock()
-	peersCopy := make([]*PeerInfo, 0, len(d.peers))
+	peersCopy := make([]*PeerInfoV2, 0, len(d.peers))
 	for _, peer := range d.peers {
 		peersCopy = append(peersCopy, peer)
 	}
@@ -351,7 +351,7 @@ func (d *DiscoveryService) updatePeerFromHeartbeat(resp *pb.HeartbeatResponse) {
 	if !ok {
 		// This is a new peer, we'll add it but won't create a connection yet
 		// since we don't have enough information
-		peer = &PeerInfo{
+		peer = &PeerInfoV2{
 			TEEID:          resp.TeeId,
 			TEEType:        resp.TeeType,
 			RegionID:       resp.RegionId,
@@ -391,7 +391,7 @@ func (d *DiscoveryService) updatePeerFromHeartbeat(resp *pb.HeartbeatResponse) {
 }
 
 // RegisterPeer adds a new peer to the discovery service
-func (d *DiscoveryService) RegisterPeer(peerInfo *PeerInfo) error {
+func (d *DiscoveryService) RegisterPeer(peerInfo *PeerInfoV2) error {
 	if peerInfo == nil {
 		return fmt.Errorf("peer info is nil")
 	}
@@ -441,11 +441,11 @@ func (d *DiscoveryService) RegisterPeer(peerInfo *PeerInfo) error {
 }
 
 // GetPeers returns a list of all peers
-func (d *DiscoveryService) GetPeers() []*PeerInfo {
+func (d *DiscoveryService) GetPeers() []*PeerInfoV2 {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 	
-	peers := make([]*PeerInfo, 0, len(d.peers))
+	peers := make([]*PeerInfoV2, 0, len(d.peers))
 	for _, peer := range d.peers {
 		peers = append(peers, peer)
 	}
@@ -454,11 +454,11 @@ func (d *DiscoveryService) GetPeers() []*PeerInfo {
 }
 
 // GetPeersByType returns a list of peers of a specific type
-func (d *DiscoveryService) GetPeersByType(teeType string) []*PeerInfo {
+func (d *DiscoveryService) GetPeersByType(teeType string) []*PeerInfoV2 {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 	
-	peers := make([]*PeerInfo, 0)
+	peers := make([]*PeerInfoV2, 0)
 	for _, peer := range d.peers {
 		if peer.TEEType == teeType && peer.Status == "active" {
 			peers = append(peers, peer)
@@ -469,7 +469,7 @@ func (d *DiscoveryService) GetPeersByType(teeType string) []*PeerInfo {
 }
 
 // GetPeer returns information about a specific peer
-func (d *DiscoveryService) GetPeer(peerID string) (*PeerInfo, bool) {
+func (d *DiscoveryService) GetPeer(peerID string) (*PeerInfoV2, bool) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 	
@@ -486,7 +486,7 @@ func (d *DiscoveryService) HandleHeartbeat(ctx context.Context, req *pb.Heartbea
 	peer, exists := d.peers[req.SenderId]
 	if !exists {
 		// Create a new peer
-		peer = &PeerInfo{
+		peer = &PeerInfoV2{
 			TEEID:         req.SenderId,
 			TEEType:       req.TeeType,
 			RegionID:      req.RegionId,
@@ -553,19 +553,19 @@ func (d *DiscoveryService) HandleGetPeers(ctx context.Context, req *pb.GetPeersR
 	}
 	
 	// Get the list of peers, filtered by type if specified
-	var peerList []*PeerInfo
+	var peers []*PeerInfoV2
 	if req.TeeType != "" {
-		peerList = d.GetPeersByType(req.TeeType)
+		peers = d.GetPeersByType(req.TeeType)
 	} else {
-		peerList = d.GetPeers()
+		peers = d.GetPeers()
 	}
 	
 	// Convert to proto format
-	peers := make([]*pb.Peer, 0, len(peerList))
-	for _, peer := range peerList {
+	peersProto := make([]*pb.Peer, 0, len(peers))
+	for _, peer := range peers {
 		// Only include active peers
 		if peer.Status == "active" {
-			peers = append(peers, &pb.Peer{
+			peersProto = append(peersProto, &pb.Peer{
 				TeeId:      peer.TEEID,
 				TeeType:    peer.TEEType,
 				RegionId:   peer.RegionID,
@@ -576,8 +576,9 @@ func (d *DiscoveryService) HandleGetPeers(ctx context.Context, req *pb.GetPeersR
 		}
 	}
 	
+	// Return the response
 	return &pb.GetPeersResponse{
-		Peers: peers,
+		Peers: peersProto,
 	}, nil
 }
 

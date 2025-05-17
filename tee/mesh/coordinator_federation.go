@@ -275,7 +275,7 @@ func (f *CoordinatorFederation) createLocalMetadata(ctx context.Context) (*Feder
 		Healthy:               true,
 		LastHeartbeat:         time.Now(),
 		TEEsReporting:         teeCount,
-		LastSuccessfulSnapshot: latestSnapshot.Timestamp,
+		LastSuccessfulSnapshot: latestSnapshot.Timestamp, // Already time.Time
 		FailoverStatus:        "active",
 		Priority:              1, // Default priority
 	}
@@ -283,9 +283,9 @@ func (f *CoordinatorFederation) createLocalMetadata(ctx context.Context) (*Feder
 	// Create metadata
 	metadata := &FederationMetadata{
 		RegionID:              f.regionID,
-		LatestSnapshotID:      string(latestSnapshot.SnapshotID),
-		SnapshotTimestamp:     latestSnapshot.Timestamp,
-		SnapshotMerkleRoot:    latestSnapshot.SnapshotSummary.MerkleRoot,
+		LatestSnapshotID:      string(latestSnapshot.SnapshotID), // Use SnapshotID
+		SnapshotTimestamp:     latestSnapshot.Timestamp, // Already time.Time
+		SnapshotMerkleRoot:    latestSnapshot.SnapshotSummary.MerkleRoot, // Use SnapshotSummary
 		RegionStatus:          "online",
 		TEECount:              teeCount,
 		FederationVersion:     f.options.FederationVersion,
