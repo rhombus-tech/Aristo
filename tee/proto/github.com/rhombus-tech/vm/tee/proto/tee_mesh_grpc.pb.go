@@ -19,12 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TeeMesh_Discover_FullMethodName      = "/proto.TeeMesh/Discover"
-	TeeMesh_DirectExecute_FullMethodName = "/proto.TeeMesh/DirectExecute"
-	TeeMesh_Ping_FullMethodName          = "/proto.TeeMesh/Ping"
-	TeeMesh_Sync_FullMethodName          = "/proto.TeeMesh/Sync"
-	TeeMesh_Heartbeat_FullMethodName     = "/proto.TeeMesh/Heartbeat"
-	TeeMesh_GetPeers_FullMethodName      = "/proto.TeeMesh/GetPeers"
+	TeeMesh_Discover_FullMethodName           = "/proto.TeeMesh/Discover"
+	TeeMesh_DirectExecute_FullMethodName      = "/proto.TeeMesh/DirectExecute"
+	TeeMesh_ProxyExecute_FullMethodName       = "/proto.TeeMesh/ProxyExecute"
+	TeeMesh_BatchDirectExecute_FullMethodName = "/proto.TeeMesh/BatchDirectExecute"
+	TeeMesh_BatchProxyExecute_FullMethodName  = "/proto.TeeMesh/BatchProxyExecute"
+	TeeMesh_Ping_FullMethodName               = "/proto.TeeMesh/Ping"
+	TeeMesh_Sync_FullMethodName               = "/proto.TeeMesh/Sync"
+	TeeMesh_Heartbeat_FullMethodName          = "/proto.TeeMesh/Heartbeat"
+	TeeMesh_GetPeers_FullMethodName           = "/proto.TeeMesh/GetPeers"
+	TeeMesh_SyncOptimized_FullMethodName      = "/proto.TeeMesh/SyncOptimized"
+	TeeMesh_GossipSync_FullMethodName         = "/proto.TeeMesh/GossipSync"
 )
 
 // TeeMeshClient is the client API for TeeMesh service.
@@ -37,6 +42,12 @@ type TeeMeshClient interface {
 	Discover(ctx context.Context, in *DiscoveryRequest, opts ...grpc.CallOption) (*DiscoveryResponse, error)
 	// DirectExecute allows one TEE to directly execute operations on another
 	DirectExecute(ctx context.Context, in *DirectExecutionRequest, opts ...grpc.CallOption) (*DirectExecutionResponse, error)
+	// ProxyExecute allows execution with automatic failover between TEEs
+	ProxyExecute(ctx context.Context, in *ProxyExecutionRequest, opts ...grpc.CallOption) (*DirectExecutionResponse, error)
+	// BatchDirectExecute processes multiple operations in a single batch
+	BatchDirectExecute(ctx context.Context, in *BatchDirectExecutionRequest, opts ...grpc.CallOption) (*BatchDirectExecutionResponse, error)
+	// BatchProxyExecute processes a batch with automatic failover between TEEs
+	BatchProxyExecute(ctx context.Context, in *BatchProxyExecutionRequest, opts ...grpc.CallOption) (*BatchDirectExecutionResponse, error)
 	// Ping is a simple health check
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 	// Sync syncs state between TEEs
@@ -45,6 +56,10 @@ type TeeMeshClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// GetPeers retrieves a list of attested peers in the region
 	GetPeers(ctx context.Context, in *GetPeersRequest, opts ...grpc.CallOption) (*GetPeersResponse, error)
+	// SyncOptimized provides an optimized state synchronization
+	SyncOptimized(ctx context.Context, in *SyncOptimizedRequest, opts ...grpc.CallOption) (*SyncOptimizedResponse, error)
+	// GossipSync propagates updates between peers
+	GossipSync(ctx context.Context, in *GossipSyncMessage, opts ...grpc.CallOption) (*SyncOptimizedResponse, error)
 }
 
 type teeMeshClient struct {
@@ -69,6 +84,36 @@ func (c *teeMeshClient) DirectExecute(ctx context.Context, in *DirectExecutionRe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DirectExecutionResponse)
 	err := c.cc.Invoke(ctx, TeeMesh_DirectExecute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *teeMeshClient) ProxyExecute(ctx context.Context, in *ProxyExecutionRequest, opts ...grpc.CallOption) (*DirectExecutionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DirectExecutionResponse)
+	err := c.cc.Invoke(ctx, TeeMesh_ProxyExecute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *teeMeshClient) BatchDirectExecute(ctx context.Context, in *BatchDirectExecutionRequest, opts ...grpc.CallOption) (*BatchDirectExecutionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchDirectExecutionResponse)
+	err := c.cc.Invoke(ctx, TeeMesh_BatchDirectExecute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *teeMeshClient) BatchProxyExecute(ctx context.Context, in *BatchProxyExecutionRequest, opts ...grpc.CallOption) (*BatchDirectExecutionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchDirectExecutionResponse)
+	err := c.cc.Invoke(ctx, TeeMesh_BatchProxyExecute_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +160,26 @@ func (c *teeMeshClient) GetPeers(ctx context.Context, in *GetPeersRequest, opts 
 	return out, nil
 }
 
+func (c *teeMeshClient) SyncOptimized(ctx context.Context, in *SyncOptimizedRequest, opts ...grpc.CallOption) (*SyncOptimizedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncOptimizedResponse)
+	err := c.cc.Invoke(ctx, TeeMesh_SyncOptimized_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *teeMeshClient) GossipSync(ctx context.Context, in *GossipSyncMessage, opts ...grpc.CallOption) (*SyncOptimizedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncOptimizedResponse)
+	err := c.cc.Invoke(ctx, TeeMesh_GossipSync_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TeeMeshServer is the server API for TeeMesh service.
 // All implementations must embed UnimplementedTeeMeshServer
 // for forward compatibility.
@@ -125,6 +190,12 @@ type TeeMeshServer interface {
 	Discover(context.Context, *DiscoveryRequest) (*DiscoveryResponse, error)
 	// DirectExecute allows one TEE to directly execute operations on another
 	DirectExecute(context.Context, *DirectExecutionRequest) (*DirectExecutionResponse, error)
+	// ProxyExecute allows execution with automatic failover between TEEs
+	ProxyExecute(context.Context, *ProxyExecutionRequest) (*DirectExecutionResponse, error)
+	// BatchDirectExecute processes multiple operations in a single batch
+	BatchDirectExecute(context.Context, *BatchDirectExecutionRequest) (*BatchDirectExecutionResponse, error)
+	// BatchProxyExecute processes a batch with automatic failover between TEEs
+	BatchProxyExecute(context.Context, *BatchProxyExecutionRequest) (*BatchDirectExecutionResponse, error)
 	// Ping is a simple health check
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	// Sync syncs state between TEEs
@@ -133,6 +204,10 @@ type TeeMeshServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// GetPeers retrieves a list of attested peers in the region
 	GetPeers(context.Context, *GetPeersRequest) (*GetPeersResponse, error)
+	// SyncOptimized provides an optimized state synchronization
+	SyncOptimized(context.Context, *SyncOptimizedRequest) (*SyncOptimizedResponse, error)
+	// GossipSync propagates updates between peers
+	GossipSync(context.Context, *GossipSyncMessage) (*SyncOptimizedResponse, error)
 	mustEmbedUnimplementedTeeMeshServer()
 }
 
@@ -149,6 +224,15 @@ func (UnimplementedTeeMeshServer) Discover(context.Context, *DiscoveryRequest) (
 func (UnimplementedTeeMeshServer) DirectExecute(context.Context, *DirectExecutionRequest) (*DirectExecutionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DirectExecute not implemented")
 }
+func (UnimplementedTeeMeshServer) ProxyExecute(context.Context, *ProxyExecutionRequest) (*DirectExecutionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProxyExecute not implemented")
+}
+func (UnimplementedTeeMeshServer) BatchDirectExecute(context.Context, *BatchDirectExecutionRequest) (*BatchDirectExecutionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BatchDirectExecute not implemented")
+}
+func (UnimplementedTeeMeshServer) BatchProxyExecute(context.Context, *BatchProxyExecutionRequest) (*BatchDirectExecutionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BatchProxyExecute not implemented")
+}
 func (UnimplementedTeeMeshServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
 }
@@ -160,6 +244,12 @@ func (UnimplementedTeeMeshServer) Heartbeat(context.Context, *HeartbeatRequest) 
 }
 func (UnimplementedTeeMeshServer) GetPeers(context.Context, *GetPeersRequest) (*GetPeersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPeers not implemented")
+}
+func (UnimplementedTeeMeshServer) SyncOptimized(context.Context, *SyncOptimizedRequest) (*SyncOptimizedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SyncOptimized not implemented")
+}
+func (UnimplementedTeeMeshServer) GossipSync(context.Context, *GossipSyncMessage) (*SyncOptimizedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GossipSync not implemented")
 }
 func (UnimplementedTeeMeshServer) mustEmbedUnimplementedTeeMeshServer() {}
 func (UnimplementedTeeMeshServer) testEmbeddedByValue()                 {}
@@ -214,6 +304,60 @@ func _TeeMesh_DirectExecute_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TeeMeshServer).DirectExecute(ctx, req.(*DirectExecutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TeeMesh_ProxyExecute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProxyExecutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeMeshServer).ProxyExecute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeMesh_ProxyExecute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeMeshServer).ProxyExecute(ctx, req.(*ProxyExecutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TeeMesh_BatchDirectExecute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchDirectExecutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeMeshServer).BatchDirectExecute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeMesh_BatchDirectExecute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeMeshServer).BatchDirectExecute(ctx, req.(*BatchDirectExecutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TeeMesh_BatchProxyExecute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchProxyExecutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeMeshServer).BatchProxyExecute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeMesh_BatchProxyExecute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeMeshServer).BatchProxyExecute(ctx, req.(*BatchProxyExecutionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -290,6 +434,42 @@ func _TeeMesh_GetPeers_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TeeMesh_SyncOptimized_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncOptimizedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeMeshServer).SyncOptimized(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeMesh_SyncOptimized_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeMeshServer).SyncOptimized(ctx, req.(*SyncOptimizedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TeeMesh_GossipSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GossipSyncMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeeMeshServer).GossipSync(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeeMesh_GossipSync_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeeMeshServer).GossipSync(ctx, req.(*GossipSyncMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TeeMesh_ServiceDesc is the grpc.ServiceDesc for TeeMesh service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -306,6 +486,18 @@ var TeeMesh_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TeeMesh_DirectExecute_Handler,
 		},
 		{
+			MethodName: "ProxyExecute",
+			Handler:    _TeeMesh_ProxyExecute_Handler,
+		},
+		{
+			MethodName: "BatchDirectExecute",
+			Handler:    _TeeMesh_BatchDirectExecute_Handler,
+		},
+		{
+			MethodName: "BatchProxyExecute",
+			Handler:    _TeeMesh_BatchProxyExecute_Handler,
+		},
+		{
 			MethodName: "Ping",
 			Handler:    _TeeMesh_Ping_Handler,
 		},
@@ -320,6 +512,14 @@ var TeeMesh_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPeers",
 			Handler:    _TeeMesh_GetPeers_Handler,
+		},
+		{
+			MethodName: "SyncOptimized",
+			Handler:    _TeeMesh_SyncOptimized_Handler,
+		},
+		{
+			MethodName: "GossipSync",
+			Handler:    _TeeMesh_GossipSync_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

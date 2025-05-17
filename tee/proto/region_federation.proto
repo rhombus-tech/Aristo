@@ -52,13 +52,13 @@ message RegionDiscoveryResponse {
 
 // RegionInfo contains information about a region
 message RegionInfo {
-  string region_id = 1 [(gogoproto.jsontag) = "RegionID", (gogoproto.moretags) = "yaml:\"RegionID\""];
-  string endpoint = 2 [(gogoproto.jsontag) = "Endpoint", (gogoproto.moretags) = "yaml:\"Endpoint\""];
-  string status = 3 [(gogoproto.jsontag) = "Status", (gogoproto.moretags) = "yaml:\"Status\""];
-  bool admin_capabilities = 4 [(gogoproto.jsontag) = "AdminCapabilities", (gogoproto.moretags) = "yaml:\"AdminCapabilities\""];
-  int64 last_contact_time = 5 [(gogoproto.jsontag) = "LastContactTime", (gogoproto.moretags) = "yaml:\"LastContactTime\""];
-  int32 tee_count = 6 [(gogoproto.jsontag) = "TEECount", (gogoproto.moretags) = "yaml:\"TEECount\""];
-  repeated string capabilities = 7 [(gogoproto.jsontag) = "Capabilities", (gogoproto.moretags) = "yaml:\"Capabilities\""];
+  string region_id = 1;
+  string endpoint = 2;
+  string status = 3;
+  bool admin_capabilities = 4;
+  int64 last_contact_time = 5;
+  int32 tee_count = 6;
+  repeated string capabilities = 7;
 }
 
 // RegionSyncRequest requests state synchronization with another region
@@ -99,7 +99,7 @@ message StateChangeProposal {
   int64 state_version = 5;      // Version number of the state
   int64 proposal_id = 6;        // Unique ID for this proposal
   int64 expiration_time = 7;    // When this proposal expires (Unix timestamp)
-  bytes signature = 8;          // Signature for authentication
+  map<string, bytes> signatures = 8;
 }
 
 // StateChangeResponse is the response to a state change proposal
@@ -130,36 +130,53 @@ message FederatedSnapshotResponse {
 
 // FederatedSnapshot represents a snapshot across multiple regions
 message FederatedSnapshot {
-  string federation_id = 1 [(gogoproto.jsontag) = "FederationID", (gogoproto.moretags) = "yaml:\"FederationID\""];
-  bytes snapshot_id = 2 [(gogoproto.jsontag) = "SnapshotID", (gogoproto.moretags) = "yaml:\"SnapshotID\""];
-  int64 timestamp = 3 [(gogoproto.jsontag) = "Timestamp", (gogoproto.moretags) = "yaml:\"Timestamp\""];
-  map<string, RegionalSnapshot> regional_snapshots = 4 [(gogoproto.jsontag) = "RegionalSnapshots", (gogoproto.moretags) = "yaml:\"RegionalSnapshots\""];
-  bytes global_state_root = 5 [(gogoproto.jsontag) = "GlobalStateRoot", (gogoproto.moretags) = "yaml:\"GlobalStateRoot\""];
-  bytes coordinator_signature = 6 [(gogoproto.jsontag) = "CoordinatorSignature", (gogoproto.moretags) = "yaml:\"CoordinatorSignature\""];
-  map<string, bytes> consensus_metadata = 7 [(gogoproto.jsontag) = "ConsensusMetadata", (gogoproto.moretags) = "yaml:\"ConsensusMetadata\""];
+  string federation_id = 1;
+  bytes snapshot_id = 2;
+  int64 timestamp = 3;
+  repeated RegionalSnapshot region_snapshots = 4;
+  bytes global_state_root = 5;
+  bytes coordinator_signature = 6;
+  map<string, bytes> consensus_metadata = 7;
 }
 
 // RegionalSnapshot represents a snapshot for a region
 message RegionalSnapshot {
-  string region_id = 1 [(gogoproto.jsontag) = "RegionID", (gogoproto.moretags) = "yaml:\"RegionID\""];
-  bytes snapshot_id = 2 [(gogoproto.jsontag) = "SnapshotID", (gogoproto.moretags) = "yaml:\"SnapshotID\""];
-  int64 timestamp = 3 [(gogoproto.jsontag) = "Timestamp", (gogoproto.moretags) = "yaml:\"Timestamp\""];
-  repeated bytes tee_snapshot_ids = 4 [(gogoproto.jsontag) = "TEESnapshotIDs", (gogoproto.moretags) = "yaml:\"TEESnapshotIDs\""];
-  SnapshotSummary summary = 5 [(gogoproto.jsontag) = "SnapshotSummary", (gogoproto.moretags) = "yaml:\"SnapshotSummary\""];
-  bytes coordinator_signature = 6 [(gogoproto.jsontag) = "CoordinatorSignature", (gogoproto.moretags) = "yaml:\"CoordinatorSignature\""];
-  repeated bytes verifier_signatures = 7 [(gogoproto.jsontag) = "VerifierSignatures", (gogoproto.moretags) = "yaml:\"VerifierSignatures\""];
-  map<string, string> metadata = 8 [(gogoproto.jsontag) = "Metadata", (gogoproto.moretags) = "yaml:\"Metadata\""];
-  ConsensusInfo consensus_info = 9 [(gogoproto.jsontag) = "ConsensusInfo", (gogoproto.moretags) = "yaml:\"ConsensusInfo\""];
-  repeated bytes tee_snapshots = 10 [(gogoproto.jsontag) = "TEESnapshots", (gogoproto.moretags) = "yaml:\"TEESnapshots\""];
+  string region_id = 1;                     // Region this snapshot represents
+  bytes snapshot_id = 2;                    // Unique identifier for this snapshot (hash)
+  int64 timestamp = 3;                      // Time the snapshot was created (Unix timestamp in nanoseconds)
+  
+  // TEE snapshots included
+  repeated bytes tee_snapshot_ids = 4;      // IDs of TEE snapshots included
+  repeated bytes tee_snapshots = 10;        // Individual TEE snapshots
+  SnapshotSummary snapshot_summary = 5;     // Summary of all included snapshots
+  
+  // Consensus data
+  SnapshotConsensusInfo consensus_info = 9; // Information about the consensus process
+  
+  // Verification
+  bytes coordinator_signature = 6;          // Signature from the regional coordinator
+  repeated bytes verifier_signatures = 7;    // Optional signatures from external verifiers
+  
+  // Metadata
+  map<string, string> metadata = 11;        // Additional metadata
 }
 
 // SnapshotSummary summarizes a snapshot
 message SnapshotSummary {
-  bytes merkle_root = 1 [(gogoproto.jsontag) = "MerkleRoot", (gogoproto.moretags) = "yaml:\"MerkleRoot\""];
-  map<string, bytes> state_root_hashes = 2 [(gogoproto.jsontag) = "StateRootHashes", (gogoproto.moretags) = "yaml:\"StateRootHashes\""];
-  int32 object_count = 3 [(gogoproto.jsontag) = "ObjectCount", (gogoproto.moretags) = "yaml:\"ObjectCount\""];
-  int64 total_state_size = 4 [(gogoproto.jsontag) = "TotalStateSize", (gogoproto.moretags) = "yaml:\"TotalStateSize\""];
-  map<string, double> metrics = 5 [(gogoproto.jsontag) = "Metrics", (gogoproto.moretags) = "yaml:\"Metrics\""];
+  bytes merkle_root = 1;                   // Merkle root of all snapshot IDs
+  map<string, bytes> state_root_hashes = 2; // State root hashes by TEE ID
+  int32 object_count = 3;                  // Number of distinct objects in all snapshots
+  int64 total_state_size = 4;              // Total size of all state data
+  map<string, double> regional_metrics = 5; // Aggregated metrics
+}
+
+// SnapshotConsensusInfo contains information about the consensus process for a snapshot
+message SnapshotConsensusInfo {
+  int32 tee_count = 1;           // Total number of TEEs in the region
+  int32 participating_tees = 2;  // Number of TEEs that participated
+  double consensus_level = 3;    // Level of consensus achieved (0.0-1.0)
+  string consensus_method = 4;   // Method used to achieve consensus
+  bool consensus_success = 5;    // Whether consensus was successful
 }
 
 // VerifyFederatedSnapshotRequest requests verification of a federated snapshot

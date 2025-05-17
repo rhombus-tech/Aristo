@@ -1943,7 +1943,8 @@ func file_region_federation_proto_init() {
 	if File_region_federation_proto != nil {
 		return
 	}
-	file_tee_mesh_proto_init()
+	// Skip tee_mesh initialization since it's causing problems
+	// file_tee_mesh_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

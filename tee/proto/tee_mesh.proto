@@ -4,6 +4,8 @@ package proto;
 
 option go_package = "github.com/rhombus-tech/vm/tee/proto";
 
+import "google/protobuf/timestamp.proto";
+
 // TeeMesh service manages direct communication between TEEs
 service TeeMesh {
   // Discover allows TEEs to find each other within the same region
@@ -32,6 +34,12 @@ service TeeMesh {
   
   // GetPeers retrieves a list of attested peers in the region
   rpc GetPeers(GetPeersRequest) returns (GetPeersResponse) {}
+  
+  // SyncOptimized provides an optimized state synchronization
+  rpc SyncOptimized(SyncOptimizedRequest) returns (SyncOptimizedResponse) {}
+  
+  // GossipSync propagates updates between peers
+  rpc GossipSync(GossipSyncMessage) returns (SyncOptimizedResponse) {}
 }
 
 // DiscoveryRequest contains information about the requesting TEE
@@ -271,6 +279,99 @@ message BatchStatistics {
   uint64 total_network_latency_ns = 8;                   // Total network latency
   uint64 total_memory_used = 9;                          // Total memory used
   uint32 dependency_wait_count = 10;                     // Number of operations that had to wait on dependencies
+}
+
+// MerkleProofMessage contains proof data for an object in the Merkle tree
+message MerkleProofMessage {
+  string object_id = 1;
+  repeated bytes proof_path = 2;
+  bytes root_hash = 3;
+  bytes object_hash = 4;
+}
+
+// DomainProofMessage contains proof data for a domain
+message DomainProofMessage {
+  string domain_id = 1;
+  MerkleProofMessage proof = 2;
+}
+
+// DiffOperation represents the type of operation in a differential update
+enum DiffOperation {
+  DIFF_OP_ADD = 0;
+  DIFF_OP_REMOVE = 1;
+  DIFF_OP_MODIFY = 2;
+  DIFF_OP_UNCHANGED = 3;
+}
+
+// FieldChangeMessage represents a change to a field in a structured object
+message FieldChangeMessage {
+  string field_path = 1;
+  DiffOperation operation = 2;
+  bytes previous_value = 3;
+  bytes current_value = 4;
+}
+
+// ObjectDiffMessage represents changes to a single object
+message ObjectDiffMessage {
+  string object_id = 1;
+  DiffOperation operation = 2;
+  bytes previous_hash = 3;
+  bytes current_hash = 4;
+  int64 size_delta = 5;
+  bool is_binary = 6;
+  repeated FieldChangeMessage field_changes = 7;
+}
+
+// EnhancedDifferentialUpdate represents an optimized state update with Merkle proofs
+message EnhancedDifferentialUpdate {
+  // Base differential update
+  bytes base_snapshot_id = 1;
+  bytes target_snapshot_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  
+  // Object changes
+  map<string, ObjectDiffMessage> object_changes = 4;
+  map<string, bytes> state_references = 5;
+  map<string, bytes> changed_objects_raw = 6;
+  
+  // Merkle verification data
+  bytes merkle_root = 7;
+  repeated DomainProofMessage domain_proofs = 8;
+  
+  // Metadata
+  map<string, string> metadata = 9;
+  int64 size = 10;
+  bytes checksum = 11;
+}
+
+// SyncOptimizedRequest optimizes state sync with domain-based partitioning and gossip
+message SyncOptimizedRequest {
+  string source_tee_id = 1;
+  bytes base_snapshot_id = 2;
+  repeated string domains = 3; // Only sync specific domains if provided
+  bool force_full_sync = 4;    // Force full sync even if partial sync is possible
+  int32 max_diff_size = 5;     // Maximum diff size in bytes (0 = no limit)
+}
+
+// SyncOptimizedResponse contains optimized differential updates
+message SyncOptimizedResponse {
+  string source_tee_id = 1;
+  bool success = 2;
+  string error_message = 3;
+  EnhancedDifferentialUpdate diff_update = 4;
+  bool is_partial = 5;          // Whether this is a partial update
+  repeated string synced_domains = 6; // Domains included in this update
+  google.protobuf.Timestamp sync_time = 7;
+}
+
+// GossipSyncMessage enables efficient propagation of updates between peers
+message GossipSyncMessage {
+  string originator_id = 1;     // Original source TEE ID
+  repeated string target_ids = 2; // Intended recipients (empty = broadcast)
+  EnhancedDifferentialUpdate diff_update = 3;
+  int32 hop_count = 4;         // Number of hops this update has taken
+  int32 max_hops = 5;         // Maximum number of hops (TTL)
+  google.protobuf.Timestamp timestamp = 6;
 }
 
 // BatchProxyExecutionRequest extends BatchDirectExecutionRequest with failover options
