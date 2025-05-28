@@ -146,9 +146,9 @@ func TestHandleGossipSync(t *testing.T) {
 	// Verify the metrics were updated
 	assert.Equal(t, int64(1), service.metrics.GossipMessagesTotal, "Gossip message count should be incremented")
 	
-	// In the current implementation, this should return an error since it's not implemented
-	assert.Error(t, err, "Should return an error since implementation is pending")
-	assert.Contains(t, err.Error(), "not yet implemented", "Error should indicate implementation is pending")
+	// The implementation now validates the message format
+	assert.Error(t, err, "Should return an error for invalid message format")
+	assert.Contains(t, err.Error(), "invalid gossip message format", "Error should indicate invalid message format")
 }
 
 // TestTimeToProtoTimestamp tests the timeToProtoTimestamp function
